@@ -80,7 +80,7 @@ class ControllerProcess:
 
     def environment(self) -> dict[str, str]:
         settings = self._instance.settings
-        env = os.environ.copy()
+        env = os.environ | self._instance.env_overrides
         env.update(self.spec.env)
         if self.spec.path.suffix == ".py":
             home = self._require_home(settings)

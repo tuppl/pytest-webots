@@ -60,6 +60,11 @@ class WebotsInstance:
         self._agent_address: str | None = None
         self._boot_failures = 0
         self._boot_error: BaseException | None = None
+        self.env_overrides: dict[str, str] = {}
+        if settings.worker_id is not None:
+            self.env_overrides["WEBOTS_TMPDIR"] = str(
+                Path(tempfile.gettempdir()) / f"pytest-webots-{settings.worker_id}"
+            )
 
     @property
     def world(self) -> str:
@@ -121,8 +126,11 @@ class WebotsInstance:
         self._output.clear()
         if self.settings.inject_supervisor:
             self._injected = inject_supervisor(self.spec.path, self.settings.supervisor_name, str(self.port))
+        if "WEBOTS_TMPDIR" in self.env_overrides:
+            Path(self.env_overrides["WEBOTS_TMPDIR"]).mkdir(exist_ok=True)
         self._proc = subprocess.Popen(
             self.command(),
+            env=os.environ | self.env_overrides,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -241,7 +249,7 @@ class WebotsInstance:
             Path(self._agent_address).unlink(missing_ok=True)
         home = self.settings.home
         assert home is not None
-        env = os.environ.copy()
+        env = os.environ | self.env_overrides
         env["WEBOTS_HOME"] = str(home)
         env["WEBOTS_CONTROLLER_URL"] = f"ipc://{self.port}/{self.settings.supervisor_name}"
         bundled = str(python_controller_path(home))
