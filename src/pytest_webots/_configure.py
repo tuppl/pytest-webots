@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import pytest
 
+from ._core.config import SETTINGS_KEY, Settings
+from ._core.registry import REGISTRY_KEY, WorldRegistry
+
 
 @pytest.hookimpl
 def pytest_configure(config: pytest.Config) -> None:
+    settings = Settings.from_config(config)
+    config.stash[SETTINGS_KEY] = settings
+    config.stash[REGISTRY_KEY] = WorldRegistry(settings)
     config.addinivalue_line(
         "markers",
         "webots_world(path, *, scope='session', mode=None, args=None, timeout=None): "
