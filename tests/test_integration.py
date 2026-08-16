@@ -79,6 +79,12 @@ def test_function_scope_reboots_each_test(webots: WebotsSession, world_boots: li
     assert world_boots.count("second.wbt") == run
 
 
+@pytest.mark.webots_world("worlds/second.wbt", scope="function")
+@pytest.mark.parametrize("run", [1, 2])
+def test_bare_webots_world_revives_after_scope_teardown(webots_world, run: int) -> None:
+    assert webots_world.alive
+
+
 def test_boot_timeout(tmp_path: Path) -> None:
     settings = Settings(
         home=discover_webots_home(None),

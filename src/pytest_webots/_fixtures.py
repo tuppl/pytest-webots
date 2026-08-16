@@ -33,7 +33,7 @@ def webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
         instance.on_crashed = lambda error: hook.pytest_webots_world_crashed(instance=instance, error=error)
         instance.on_before_reset = lambda: hook.pytest_webots_before_reset(instance=instance)
         instance.on_after_reset = lambda: hook.pytest_webots_after_reset(instance=instance)
-        instance.boot()
+    instance.ensure_running()
     yield instance
     instance.shutdown()
 
