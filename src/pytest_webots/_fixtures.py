@@ -24,21 +24,27 @@ def webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
         hook = config.hook
         instance.on_started = lambda: hook.pytest_webots_world_started(instance=instance)
         instance.on_stopping = lambda: hook.pytest_webots_world_stopping(instance=instance)
+        instance.on_crashed = lambda error: hook.pytest_webots_world_crashed(instance=instance, error=error)
+        instance.on_before_reset = lambda: hook.pytest_webots_before_reset(instance=instance)
+        instance.on_after_reset = lambda: hook.pytest_webots_after_reset(instance=instance)
         instance.boot()
     yield instance
     instance.shutdown()
 
 
 @pytest.fixture
-def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> WebotsSession:
+def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iterator[WebotsSession]:
     scope = webots_world.spec.scope
     if scope == "function":
         request.addfinalizer(webots_world.shutdown)
     elif scope in ("class", "module"):
-        # Narrower than the parametrize scope: enforce the boundary ourselves.
+        # Narrower than the parametrize scope.
         node_type = pytest.Class if scope == "class" else pytest.Module
         node = request.node.getparent(node_type)
         if node is not None:
             node.addfinalizer(webots_world.shutdown)
     webots_world.ensure_running()
-    return WebotsSession(webots_world)
+    yield WebotsSession(webots_world)
+    # Reset for the next test.
+    if scope != "function" and webots_world.alive:
+        webots_world.reset()

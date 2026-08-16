@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Webots GUI-state sidecars
+.*.wbproj

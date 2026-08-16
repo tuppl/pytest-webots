@@ -4,7 +4,11 @@ WorldInfo {
 }
 Viewpoint {
 }
+DEF BALL Solid {
+  translation 0 0 1
+}
 Robot {
   name "probe"
   controller "<extern>"
+  synchronization FALSE
 }

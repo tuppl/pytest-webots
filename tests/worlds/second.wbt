@@ -7,4 +7,5 @@ Viewpoint {
 Robot {
   name "probe"
   controller "<extern>"
+  synchronization FALSE
 }

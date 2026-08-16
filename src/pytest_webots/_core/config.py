@@ -33,6 +33,15 @@ def controller_launcher(home: Path) -> Path:
     return home / _LAUNCHER
 
 
+def python_controller_path(home: Path) -> Path:
+    """
+    Directory of the Webots-bundled pure-Python controller package.
+    """
+    if sys.platform == "darwin":
+        return home / "Contents/lib/controller/python"
+    return home / "lib/controller/python"
+
+
 def discover_webots_home(explicit: str | None) -> Path | None:
     """
     Find a Webots installation: explicit setting, then WEBOTS_HOME, then platform defaults.
