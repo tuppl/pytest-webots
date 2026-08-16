@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from ._core.markers import collect_controller_specs
 from ._core.registry import REGISTRY_KEY
 from ._core.session import WebotsSession
 
@@ -11,6 +12,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from ._core.world import WebotsInstance
+
+SESSION_KEY: pytest.StashKey[WebotsSession] = pytest.StashKey()
 
 
 @pytest.fixture(scope="session")
@@ -44,7 +47,19 @@ def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iter
         if node is not None:
             node.addfinalizer(webots_world.shutdown)
     webots_world.ensure_running()
-    yield WebotsSession(webots_world)
-    # Reset for the next test.
+
+    session = WebotsSession(webots_world)
+    request.node.stash[SESSION_KEY] = session
+    config = request.config
+    specs = collect_controller_specs(request.node, config.rootpath)
+    for extra in config.hook.pytest_webots_controllers(item=request.node, instance=webots_world):
+        specs.extend(extra)
+    session.setup_controllers(specs)
+
+    yield session
+
+    # Reset while controllers are still connected: a dangling synchronous robot
+    # would block the simulation and hang the reset's landing step.
     if scope != "function" and webots_world.alive:
         webots_world.reset()
+    session.terminate_controllers()

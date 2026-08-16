@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from .markers import WorldSpec
 
 _URL_RE = re.compile(r"^(?:ipc|tcp)://\d+/(.+)$")
+_CONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: connected\.")
+_DISCONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: disconnected")
 _TERMINATE_GRACE = 5.0
 _AGENT_SCRIPT = Path(__file__).parent / "supervisor" / "agent.py"
 
@@ -41,6 +43,8 @@ class WebotsInstance:
         self.settings = settings
         self.port = port
         self.robots: dict[str, str] = {}
+        self.connected: set[str] = set()
+        self._connect_gen: dict[str, int] = {}  # monotonic per robot, never reset
         self.on_started: Callable[[], None] | None = None
         self.on_stopping: Callable[[], None] | None = None
         self.on_crashed: Callable[[BaseException], None] | None = None
@@ -113,6 +117,7 @@ class WebotsInstance:
 
     def _boot(self) -> None:
         self.robots.clear()
+        self.connected.clear()
         self._output.clear()
         if self.settings.inject_supervisor:
             self._injected = inject_supervisor(self.spec.path, self.settings.supervisor_name, str(self.port))
@@ -149,6 +154,7 @@ class WebotsInstance:
         """
         with self._lock:
             self.robots.clear()  # before the reload lands, so re-announced URLs aren't wiped
+            self.connected.clear()
         self._request({"op": "reload"}, expect_disconnect=True)
         self._teardown_agent()
         self._wait_ready()
@@ -176,6 +182,22 @@ class WebotsInstance:
             time.sleep(0.05)
         raise WorldBootTimeout(f"world {self.world} did not become ready within {timeout:.0f}s:\n{self.output()}")
 
+    def connection_generation(self, name: str) -> int:
+        """
+        Count of connect events seen for this robot; snapshot it before a
+        launch so readiness can demand a connect that is provably new.
+        """
+        with self._lock:
+            return self._connect_gen.get(name, 0)
+
+    def connection_active(self, name: str, after: int) -> bool:
+        """
+        True only for a connection established by a connect event newer than
+        ``after`` — a stale pre-relaunch state can never satisfy this.
+        """
+        with self._lock:
+            return self._connect_gen.get(name, 0) > after and name in self.connected
+
     def wait_for_robot(self, name: str, timeout: float) -> str:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -196,11 +218,19 @@ class WebotsInstance:
         assert proc is not None and proc.stdout is not None
         for line in proc.stdout:
             line = line.rstrip("\n")
-            match = _URL_RE.match(line)
-            if match:
+            if match := _URL_RE.match(line):
                 with self._lock:
                     self.robots[match.group(1)] = line
-            elif line:
+                continue
+            if match := _CONNECTED_RE.match(line):
+                with self._lock:
+                    name = match.group(1)
+                    self.connected.add(name)
+                    self._connect_gen[name] = self._connect_gen.get(name, 0) + 1
+            elif match := _DISCONNECTED_RE.match(line):
+                with self._lock:
+                    self.connected.discard(match.group(1))
+            if line:
                 self._output.append(line)
 
     def _start_agent(self) -> None:

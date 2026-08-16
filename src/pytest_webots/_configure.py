@@ -19,6 +19,7 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "webots_controller(robot, path, *, build=None, args=None, env=None, cwd=None, autostart=True): "
-        "launch an extern controller for the named robot. Stackable, one marker per robot.",
+        "webots_controller(robot, path, *, build=None, args=None, env=None, cwd=None, autostart=True, "
+        "protocol='ipc', ip_address=None): launch an extern controller for the named robot. "
+        "Stackable, one marker per robot; protocol='tcp' connects via TCP, optionally to a remote ip_address.",
     )
