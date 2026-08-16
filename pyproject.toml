@@ -1,0 +1,39 @@
+[project]
+name = "pytest-webots"
+version = "0.1.0"
+description = "pytest plugin for running Webots simulation with tests"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dan Nguyen", email = "dan@tuppl.dev" }]
+keywords = ["pytest", "robot", "simulation", "webots"]
+dependencies = [
+  "filelock>=3.13",
+  "pytest>=9.1.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/tuppl/pytest-webots"
+Issues = "https://github.com/tuppl/pytest-webots/issues"
+Repository = "https://github.com/tuppl/pytest-webots"
+
+[project.entry-points.pytest11]
+webots = "pytest_webots.plugin"
+
+[dependency-groups]
+dev = [
+  "mypy>=2.3.0",
+  "pytest-xdist>=3.6",
+  "ruff>=0.16.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.mypy]
+files = ["src/pytest_webots"]
+
+[tool.ruff]
+line-length = 120
