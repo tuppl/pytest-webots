@@ -1,1 +1,3 @@
-"""Client-side transport and reflective proxy for the supervisor agent."""
+"""
+Client-side transport and reflective proxy for the supervisor agent.
+"""

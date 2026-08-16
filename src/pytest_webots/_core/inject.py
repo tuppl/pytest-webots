@@ -1,1 +1,3 @@
-"""Supervisor robot injection into copied .wbt world files."""
+"""
+Supervisor robot injection into copied .wbt world files.
+"""
