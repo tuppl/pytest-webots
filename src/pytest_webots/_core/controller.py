@@ -95,6 +95,11 @@ class ControllerProcess:
             return
         self._output.clear()
         snapshot = self._instance.connection_generation(self.spec.robot)
+        if not self.spec.path.exists():
+            raise WebotsError(
+                f"controller binary {self.spec.path} does not exist "
+                f"(build disabled via --webots-no-build or build=False?)"
+            )
         self._proc = subprocess.Popen(
             self.command(),
             cwd=str(self.spec.cwd or self.spec.path.parent),

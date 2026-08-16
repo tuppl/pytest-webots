@@ -4,6 +4,7 @@ Marker parsing: webots_world / webots_controller markers to specs; world path re
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +43,7 @@ class WorldSpec:
 class ControllerSpec:
     robot: str
     path: Path
-    build: str | tuple[str, ...] | None = None
+    build: str | tuple[str, ...] | Literal[False] | None = None  # None = auto-detect, False = never build
     args: tuple[str, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
     cwd: Path | None = None
@@ -171,9 +172,9 @@ def _controller_spec(mark: pytest.Mark, item: pytest.Item, rootpath: Path) -> Co
     if unknown:
         raise MarkerError(f"{item.nodeid}: webots_controller got unexpected kwargs {sorted(unknown)}")
     robot = str(mark.args[0])
-    path = _resolve_controller(str(mark.args[1]), item, rootpath)
-    cwd = mark.kwargs.get("cwd")
     build = mark.kwargs.get("build")
+    path = _resolve_controller(str(mark.args[1]), item, rootpath, build=build)
+    cwd = mark.kwargs.get("cwd")
     protocol = mark.kwargs.get("protocol", "ipc")
     ip_address = mark.kwargs.get("ip_address")
     if protocol not in ("ipc", "tcp"):
@@ -193,15 +194,20 @@ def _controller_spec(mark: pytest.Mark, item: pytest.Item, rootpath: Path) -> Co
     )
 
 
-def _resolve_controller(name: str, item: pytest.Item, rootpath: Path) -> Path:
+def _resolve_controller(name: str, item: pytest.Item, rootpath: Path, build: object = None) -> Path:
     resolved = _resolve_anchored(name, item, rootpath)
     if resolved.is_file():
         return resolved
-    # A directory means the Webots layout: controllers/<name>/<name>[.py]
-    candidates = [resolved / resolved.name, resolved / f"{resolved.name}.py"]
+    binary = resolved / (f"{resolved.name}.exe" if sys.platform == "win32" else resolved.name)
+    candidates = [binary, resolved / f"{resolved.name}.py"]
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
+    buildable = build not in (None, False) or (
+        build is None and ((resolved / "Makefile").is_file() or (resolved / "CMakeLists.txt").is_file())
+    )
+    if buildable:
+        return binary.resolve()
     tried = "\n  ".join(str(c) for c in candidates)
     raise MarkerError(f"{item.nodeid}: no controller found for {name!r}; tried:\n  {tried}")
 

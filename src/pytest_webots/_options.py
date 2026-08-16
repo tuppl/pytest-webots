@@ -45,3 +45,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini("webots_supervisor_name", default="pytest-supervisor", help="Name of the injected supervisor robot.")
     parser.addini("webots_inject_supervisor", type="bool", default=True, help="Inject a supervisor robot into worlds.")
     parser.addini("webots_build", type="bool", default=True, help="Build controllers before launching them.")
+    parser.addini(
+        "webots_make",
+        help="Path to the make executable (default: make on PATH; on Windows, the Webots-packaged MSYS make).",
+    )

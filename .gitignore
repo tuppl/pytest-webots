@@ -11,3 +11,7 @@ wheels/
 
 # Webots GUI-state sidecars
 .*.wbproj
+
+# pytest-webots build artifacts
+.pytest-webots.*
+tests/controllers/cprobe/cprobe

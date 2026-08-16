@@ -42,6 +42,24 @@ def python_controller_path(home: Path) -> Path:
     return home / "lib/controller/python"
 
 
+def make_home(home: Path) -> Path:
+    # macOS expects a /Contents
+    if sys.platform == "darwin":
+        return home / "Contents"
+    return home
+
+
+def default_make(home: Path | None) -> str:
+    """
+    Windows installs rarely have make on PATH, but Webots packages one.
+    """
+    if sys.platform == "win32" and home is not None:
+        packaged = home / "msys64/mingw64/bin/make.exe"
+        if packaged.exists():
+            return str(packaged)
+    return "make"
+
+
 def discover_webots_home(explicit: str | None) -> Path | None:
     """
     Find a Webots installation: explicit setting, then WEBOTS_HOME, then platform defaults.
@@ -78,6 +96,7 @@ class Settings:
     rebuild: bool
     keep_alive: bool
     worker_id: str | None
+    make: str = "make"
 
     @property
     def webots_binary(self) -> Path:
@@ -100,8 +119,9 @@ class Settings:
         explicit = config.getoption("--webots-home") or config.getini("webots_home") or None
         worlds_dir = config.getini("webots_worlds_dir")
         workerinput = getattr(config, "workerinput", None)
+        home = discover_webots_home(explicit)
         return cls(
-            home=discover_webots_home(explicit),
+            home=home,
             worlds_dir=config.rootpath / worlds_dir if worlds_dir else None,
             mode=config.getoption("--webots-mode") or config.getini("webots_mode"),
             headless=not config.getoption("--webots-gui") and config.getini("webots_headless"),
@@ -116,6 +136,7 @@ class Settings:
             rebuild=config.getoption("--webots-rebuild"),
             keep_alive=config.getoption("--webots-keep-alive"),
             worker_id=workerinput["workerid"] if workerinput else None,
+            make=config.getini("webots_make") or default_make(home),
         )
 
 

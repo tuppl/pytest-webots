@@ -21,3 +21,9 @@ class WebotsCrashedError(WebotsError):
     """
     The Webots process died or hung while a test was using it.
     """
+
+
+class BuildError(WebotsError):
+    """
+    A controller build failed or produced no output.
+    """

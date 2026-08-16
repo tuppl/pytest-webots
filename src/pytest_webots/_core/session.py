@@ -12,7 +12,7 @@ from .errors import WebotsError
 from .markers import ControllerProtocol, ControllerSpec
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from .supervisor.proxy import SupervisorProxy
     from .world import WebotsInstance
@@ -23,8 +23,9 @@ class WebotsSession:
     What a test sees: the running world, the supervisor, and this test's controllers.
     """
 
-    def __init__(self, instance: WebotsInstance) -> None:
+    def __init__(self, instance: WebotsInstance, builder: Callable[[ControllerSpec], None] | None = None) -> None:
         self._instance = instance
+        self._builder = builder
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
 
@@ -109,6 +110,8 @@ class WebotsSession:
         return self._launch(spec)
 
     def _launch(self, spec: ControllerSpec) -> ControllerProcess:
+        if self._builder is not None:
+            self._builder(spec)
         process = ControllerProcess(spec, self._instance)
         process.start()
         self.controllers[spec.robot] = process

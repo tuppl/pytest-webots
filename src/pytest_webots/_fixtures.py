@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from ._core.build import run_build
+from ._core.config import SETTINGS_KEY
 from ._core.markers import collect_controller_specs
 from ._core.registry import REGISTRY_KEY
 from ._core.session import WebotsSession
@@ -11,6 +13,7 @@ from ._core.session import WebotsSession
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from ._core.markers import ControllerSpec
     from ._core.world import WebotsInstance
 
 SESSION_KEY: pytest.StashKey[WebotsSession] = pytest.StashKey()
@@ -48,9 +51,16 @@ def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iter
             node.addfinalizer(webots_world.shutdown)
     webots_world.ensure_running()
 
-    session = WebotsSession(webots_world)
-    request.node.stash[SESSION_KEY] = session
     config = request.config
+    settings = config.stash[SETTINGS_KEY]
+
+    def builder(spec: ControllerSpec) -> None:
+        if config.hook.pytest_webots_build_controller(spec=spec, config=config):
+            return
+        run_build(spec, settings)
+
+    session = WebotsSession(webots_world, builder=builder)
+    request.node.stash[SESSION_KEY] = session
     specs = collect_controller_specs(request.node, config.rootpath)
     for extra in config.hook.pytest_webots_controllers(item=request.node, instance=webots_world):
         specs.extend(extra)

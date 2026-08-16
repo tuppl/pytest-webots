@@ -1,9 +1,12 @@
+import dataclasses
+import shutil
 import time
 from pathlib import Path
 
 import pytest
 
 from pytest_webots import ControllerProcess, WebotsError, WebotsSession
+from pytest_webots._core.build import run_build
 from pytest_webots._core.config import discover_webots_home
 
 pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no Webots installation found")
@@ -75,6 +78,18 @@ def test_crashing_controller_fails_fast_with_logs(webots: WebotsSession, tmp_pat
     assert "exploding now" in str(excinfo.value)
 
 
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not available")
+@pytest.mark.webots_world(MINIMAL)
+@pytest.mark.webots_controller("probe", "controllers/cprobe")
+def test_c_controller_builds_and_runs(webots: WebotsSession) -> None:
+    process = webots.controllers["probe"]
+    assert process.alive
+    wait_for_log(process, "cprobe controller ready")
+    settings = webots.world.settings
+    assert run_build(process.spec, settings) is False
+    assert run_build(process.spec, dataclasses.replace(settings, rebuild=True)) is True
+
+
 def test_unknown_robot_name_fails_with_available(pytester: pytest.Pytester) -> None:
     world = Path(__file__).parent / "worlds" / "second.wbt"
     pytester.makepyfile(
@@ -90,6 +105,46 @@ def test_unknown_robot_name_fails_with_available(pytester: pytest.Pytester) -> N
     result = pytester.runpytest("-p", "no:cacheprovider")
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*no robot named 'ghost'*available:*probe*"])
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not available")
+def test_build_hook_claims_custom_backend(pytester: pytest.Pytester, tmp_path: Path) -> None:
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    cprobe = Path(__file__).parent / "controllers" / "cprobe"
+    witness = tmp_path / "hook-ran"
+    home = discover_webots_home(None)
+    pytester.makeconftest(
+        f"""
+        import os
+        import subprocess
+        from pathlib import Path
+
+        from pytest_webots._core.config import make_home
+
+        def pytest_webots_build_controller(spec, config):
+            if spec.build == "my-backend":
+                env = os.environ | {{
+                    "WEBOTS_HOME": {str(home)!r},
+                    "WEBOTS_HOME_PATH": str(make_home(Path({str(home)!r}))),
+                }}
+                subprocess.run(["make", "-C", str(spec.path.parent)], check=True, env=env)
+                Path({str(witness)!r}).touch()
+                return True
+        """
+    )
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", {str(cprobe)!r}, build="my-backend")
+        def test_hook_built(webots):
+            assert webots.controllers["probe"].alive
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    assert witness.exists()
 
 
 def test_failure_report_shows_controller_output(pytester: pytest.Pytester) -> None:

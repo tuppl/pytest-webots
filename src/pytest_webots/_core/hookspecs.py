@@ -61,10 +61,11 @@ def pytest_webots_controllers(item: pytest.Item, instance: WebotsInstance) -> li
 @pytest.hookspec(firstresult=True)
 def pytest_webots_build_controller(spec: ControllerSpec, config: pytest.Config) -> bool | None:
     """
-    Build the controller for ``spec``.
+    Build the controller for ``spec``; runs before the built-in backends.
 
-    Return ``True`` if the build was handled, ``None`` to fall back to the
-    built-in backends.
+    The integration point for build systems the plugin does not ship (cmake,
+    bazel, ...): dispatch on ``spec.build``, build, and return ``True`` to mark
+    it handled. Return ``None`` to fall back to the built-in backends.
     """
 
 
