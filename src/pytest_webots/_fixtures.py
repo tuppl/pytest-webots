@@ -28,6 +28,9 @@ def webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
     instance, fresh = config.stash[REGISTRY_KEY].get_or_create(spec)
     if fresh:
         hook = config.hook
+        instance.hook_args = tuple(
+            arg for args in hook.pytest_webots_world_args(world=spec.path, config=config) for arg in args
+        )
         instance.on_started = lambda: hook.pytest_webots_world_started(instance=instance)
         instance.on_stopping = lambda: hook.pytest_webots_world_stopping(instance=instance)
         instance.on_crashed = lambda error: hook.pytest_webots_world_crashed(instance=instance, error=error)

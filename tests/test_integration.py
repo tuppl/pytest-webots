@@ -83,6 +83,28 @@ def test_bare_webots_world_revives_after_scope_teardown(webots_world, run: int) 
     assert webots_world.alive
 
 
+def test_world_args_hook_extends_command(pytester: pytest.Pytester) -> None:
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    pytester.makeconftest(
+        """
+        def pytest_webots_world_args(world, config):
+            return ["--heartbeat=5000"]
+        """
+    )
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        def test_cmd(webots_world):
+            assert "--heartbeat=5000" in webots_world.command()
+            assert webots_world.alive
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+
+
 def test_boot_timeout(tmp_path: Path) -> None:
     settings = Settings(
         home=discover_webots_home(None),

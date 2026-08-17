@@ -45,6 +45,7 @@ class WebotsInstance:
         self.robots: dict[str, str] = {}
         self.connected: set[str] = set()
         self._connect_gen: dict[str, int] = {}  # monotonic per robot, never reset
+        self.hook_args: tuple[str, ...] = ()  # from pytest_webots_world_args, set by the adapter
         self.on_started: Callable[[], None] | None = None
         self.on_stopping: Callable[[], None] | None = None
         self.on_crashed: Callable[[BaseException], None] | None = None
@@ -96,6 +97,7 @@ class WebotsInstance:
             cmd += ["--no-rendering", "--minimize"]
         cmd += self.settings.extra_args
         cmd += self.spec.args
+        cmd += self.hook_args
         cmd.append(str(self._injected if self._injected is not None else self.spec.path))
         return cmd
 
@@ -203,21 +205,6 @@ class WebotsInstance:
         """
         with self._lock:
             return self._connect_gen.get(name, 0) > after and name in self.connected
-
-    def wait_for_robot(self, name: str, timeout: float) -> str:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._lock:
-                url = self.robots.get(name)
-            if url is not None:
-                return url
-            if not self.alive:
-                break
-            time.sleep(0.05)
-        raise WebotsError(
-            f"robot {name!r} did not announce an extern controller URL "
-            f"(discovered: {sorted(self.robots) or 'none'}):\n{self.output()}"
-        )
 
     def _read_output(self) -> None:
         proc = self._proc
