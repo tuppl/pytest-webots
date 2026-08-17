@@ -1,5 +1,3 @@
-import os
-import signal
 from pathlib import Path
 
 import pytest
@@ -60,7 +58,7 @@ def test_reload_mid_test(webots: WebotsSession, world_boots: list[str]) -> None:
 
 @pytest.mark.webots_world(MINIMAL)
 def test_crash_raises_webots_crashed_error(webots: WebotsSession) -> None:
-    os.kill(webots.world.pid, signal.SIGKILL)
+    webots.world.kill()  # group kill: on Linux, webots is a wrapper whose child must die too
     with pytest.raises(WebotsCrashedError):
         webots.step()
 

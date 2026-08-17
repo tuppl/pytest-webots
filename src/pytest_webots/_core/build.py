@@ -90,8 +90,11 @@ def _run(commands: list[list[str]], directory: Path, settings: Settings) -> None
 def _source_digest(directory: Path, output: Path) -> str:
     """
     Hash of (path, mtime, size) for every source file; build outputs excluded.
+
+    Seeded with the platform so a binary built on one OS or arch never
+    cache-hits on another (e.g. a repo volume shared with a container).
     """
-    entries = []
+    entries = [f"{sys.platform}-{os.uname().machine if hasattr(os, 'uname') else ''}"]
     for path in sorted(directory.rglob("*")):
         if not path.is_file():
             continue

@@ -60,11 +60,9 @@ class WebotsInstance:
         self._agent_address: str | None = None
         self._boot_failures = 0
         self._boot_error: BaseException | None = None
-        self.env_overrides: dict[str, str] = {}
-        if settings.worker_id is not None:
-            self.env_overrides["WEBOTS_TMPDIR"] = str(
-                Path(tempfile.gettempdir()) / f"pytest-webots-{settings.worker_id}"
-            )
+        # No WEBOTS_TMPDIR override: ports fully isolate concurrent instances
+        # (the port is part of the IPC rendezvous path), and overriding the
+        # tmpdir breaks the Webots<->controller rendezvous on Linux.
 
     @property
     def world(self) -> str:
@@ -126,15 +124,15 @@ class WebotsInstance:
         self._output.clear()
         if self.settings.inject_supervisor:
             self._injected = inject_supervisor(self.spec.path, self.settings.supervisor_name, str(self.port))
-        if "WEBOTS_TMPDIR" in self.env_overrides:
-            Path(self.env_overrides["WEBOTS_TMPDIR"]).mkdir(exist_ok=True)
         self._proc = subprocess.Popen(
             self.command(),
-            env=os.environ | self.env_overrides,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            # Own process group: on Linux `webots` is a wrapper script whose
+            # child survives a SIGKILL to the wrapper; group kills catch both.
+            start_new_session=sys.platform != "win32",
         )
         self._reader = threading.Thread(target=self._read_output, name=f"webots-out-{self.port}", daemon=True)
         self._reader.start()
@@ -249,7 +247,7 @@ class WebotsInstance:
             Path(self._agent_address).unlink(missing_ok=True)
         home = self.settings.home
         assert home is not None
-        env = os.environ | self.env_overrides
+        env = os.environ.copy()
         env["WEBOTS_HOME"] = str(home)
         env["WEBOTS_CONTROLLER_URL"] = f"ipc://{self.port}/{self.settings.supervisor_name}"
         bundled = str(python_controller_path(home))
@@ -291,6 +289,21 @@ class WebotsInstance:
         self.shutdown(force=True)
         raise crash
 
+    def kill(self) -> None:
+        """
+        Hard-kill the whole Webots process group, wrapper children included.
+        """
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        if sys.platform == "win32":
+            proc.kill()
+        else:
+            try:
+                os.killpg(proc.pid, 9)
+            except ProcessLookupError:
+                pass
+
     def shutdown(self, force: bool = False) -> None:
         """
         Terminate everything; a no-op when already dead or under --webots-keep-alive.
@@ -307,7 +320,7 @@ class WebotsInstance:
                 try:
                     proc.wait(_TERMINATE_GRACE)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
+                    self.kill()
                     proc.wait()
             if self._reader is not None:
                 self._reader.join(timeout=2)
