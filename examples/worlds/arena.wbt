@@ -1,0 +1,44 @@
+#VRML_SIM R2025a utf8
+WorldInfo {
+  basicTimeStep 32
+}
+Viewpoint {
+  position -2 0 1.5
+  orientation 0 1 0 0.6
+}
+DEF FLOOR Solid {
+  name "floor"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.8 0.8
+        roughness 1
+        metalness 0
+      }
+      geometry Box {
+        size 2 2 0.02
+      }
+    }
+  ]
+}
+DEF CRATE Solid {
+  translation 0.5 0.5 0.2
+  name "crate"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.7 0.4 0.1
+        roughness 1
+        metalness 0
+      }
+      geometry Box {
+        size 0.2 0.2 0.2
+      }
+    }
+  ]
+}
+Robot {
+  name "explorer"
+  controller "<extern>"
+  synchronization FALSE
+}
