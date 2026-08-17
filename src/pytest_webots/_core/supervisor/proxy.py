@@ -33,7 +33,11 @@ class AgentClient:
         self._sock: socket.socket | None = None
         self._stream: Any = None
 
-    def connect(self, timeout: float) -> None:
+    def connect(self, timeout: float, abort: Callable[[], str | None] | None = None) -> None:
+        """
+        Retry until the agent answers a ping; ``abort`` may end the wait early
+        by returning a failure description (e.g. "the agent process died").
+        """
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -44,6 +48,9 @@ class AgentClient:
                 return
             except (OSError, AgentConnectionError):
                 self.close()
+                reason = abort() if abort is not None else None
+                if reason is not None:
+                    raise AgentConnectionError(reason) from None
                 if time.monotonic() > deadline:
                     raise AgentConnectionError(f"could not reach supervisor agent at {self._address}") from None
                 time.sleep(0.1)

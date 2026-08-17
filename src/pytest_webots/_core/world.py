@@ -56,7 +56,9 @@ class WebotsInstance:
         self._output: deque[str] = deque(maxlen=1000)
         self._lock = threading.Lock()
         self._injected: Path | None = None
-        self._agent_proc: subprocess.Popen[bytes] | None = None
+        self._agent_proc: subprocess.Popen[str] | None = None
+        self._agent_output: deque[str] = deque(maxlen=200)
+        self._agent_reader: threading.Thread | None = None
         self._client: AgentClient | None = None
         self._agent_address: str | None = None
         self._boot_failures = 0
@@ -171,6 +173,15 @@ class WebotsInstance:
     def sim_time(self) -> float:
         return float(self._request({"op": "time"}))
 
+    def agent_op(self, op: str, params: dict[str, Any]) -> Any:
+        """
+        Invoke an op on the supervisor agent, including plugin-registered ones.
+        """
+        payload: dict[str, Any] = {"op": op}
+        for key, value in params.items():
+            payload[key] = encode_args([value])[0]
+        return decode_result(self._request(payload), self._proxy_call)
+
     def _wait_ready(self) -> None:
         """
         Ready when the injected supervisor announces its URL; it sits last in
@@ -239,17 +250,31 @@ class WebotsInstance:
         env["WEBOTS_CONTROLLER_URL"] = f"ipc://{self.port}/{self.settings.supervisor_name}"
         bundled = str(python_controller_path(home))
         env["PYTHONPATH"] = bundled + os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else bundled
+        self._agent_output.clear()
         self._agent_proc = subprocess.Popen(
-            [sys.executable, str(_AGENT_SCRIPT), self._agent_address],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            [sys.executable, str(_AGENT_SCRIPT), self._agent_address] + [str(p) for p in self.settings.agent_plugins],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
             env=env,
         )
+        self._agent_reader = threading.Thread(
+            target=self._read_agent_output, name=f"agent-out-{self.port}", daemon=True
+        )
+        self._agent_reader.start()
+
+        def abort() -> str | None:
+            proc = self._agent_proc
+            if proc is not None and proc.poll() is not None:
+                return f"supervisor agent exited with code {proc.returncode}:\n{self.agent_output()}"
+            return None
+
         self._client = AgentClient(self._agent_address)
         try:
-            self._client.connect(timeout=self.settings.startup_timeout)
+            self._client.connect(timeout=self.settings.startup_timeout, abort=abort)
         except AgentConnectionError as error:
-            raise WebotsError(f"supervisor agent failed to start for {self.world}:\n{self.output()}") from error
+            raise WebotsError(f"supervisor agent failed to start for {self.world}: {error}\n{self.output()}") from error
 
     def _request(self, payload: dict[str, Any], expect_disconnect: bool = False) -> Any:
         if self._client is None:
@@ -316,6 +341,15 @@ class WebotsInstance:
         remove_injected(self._injected)
         self._injected = None
 
+    def _read_agent_output(self) -> None:
+        proc = self._agent_proc
+        assert proc is not None and proc.stdout is not None
+        for line in proc.stdout:
+            self._agent_output.append(line.rstrip("\n"))
+
+    def agent_output(self) -> str:
+        return "\n".join(self._agent_output)
+
     def _teardown_agent(self) -> None:
         if self._client is not None:
             self._client.close()
@@ -328,6 +362,9 @@ class WebotsInstance:
                 self._agent_proc.kill()
                 self._agent_proc.wait()
             self._agent_proc = None
+        if self._agent_reader is not None:
+            self._agent_reader.join(timeout=2)
+            self._agent_reader = None
         if self._agent_address is not None and not self._agent_address.startswith("tcp:"):
             Path(self._agent_address).unlink(missing_ok=True)
         self._agent_address = None

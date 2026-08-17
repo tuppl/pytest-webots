@@ -80,6 +80,14 @@ def discover_webots_home(explicit: str | None) -> Path | None:
     return None
 
 
+def _discover_agent_plugins(config: pytest.Config) -> tuple[Path, ...]:
+    plugins = tuple(config.getini("webots_agent_plugins"))
+    missing = [str(p) for p in plugins if not p.is_file()]
+    if missing:
+        raise pytest.UsageError(f"webots_agent_plugins files not found: {', '.join(missing)}")
+    return plugins
+
+
 @dataclass(frozen=True)
 class Settings:
     home: Path | None
@@ -97,6 +105,7 @@ class Settings:
     keep_alive: bool
     worker_id: str | None
     make: str = "make"
+    agent_plugins: tuple[Path, ...] = ()
 
     @property
     def webots_binary(self) -> Path:
@@ -137,6 +146,7 @@ class Settings:
             keep_alive=config.getoption("--webots-keep-alive"),
             worker_id=workerinput["workerid"] if workerinput else None,
             make=config.getini("webots_make") or default_make(home),
+            agent_plugins=_discover_agent_plugins(config),
         )
 
 

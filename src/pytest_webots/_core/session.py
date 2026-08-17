@@ -5,7 +5,7 @@ Per-test session object handed to tests by the webots fixture.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .controller import ControllerProcess
 from .errors import WebotsError
@@ -18,6 +18,26 @@ if TYPE_CHECKING:
     from .world import WebotsInstance
 
 
+class AgentOps:
+    """
+    Method-style access to agent ops: ``webots.ops.step_until(threshold=0.01)``
+    invokes the op named ``step_until`` with keyword arguments as request fields.
+    """
+
+    def __init__(self, instance: WebotsInstance) -> None:
+        self._instance = instance
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def call(**params: Any) -> Any:
+            return self._instance.agent_op(name, params)
+
+        call.__name__ = name
+        return call
+
+
 class WebotsSession:
     """
     What a test sees: the running world, the supervisor, and this test's controllers.
@@ -26,6 +46,7 @@ class WebotsSession:
     def __init__(self, instance: WebotsInstance, builder: Callable[[ControllerSpec], None] | None = None) -> None:
         self._instance = instance
         self._builder = builder
+        self.ops = AgentOps(instance)
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
 
@@ -56,6 +77,12 @@ class WebotsSession:
 
     def sim_time(self) -> float:
         return self._instance.sim_time()
+
+    def agent_op(self, op: str, **params: Any) -> Any:
+        """
+        Invoke a supervisor-agent op, e.g. one registered by a webots_agent_plugins file.
+        """
+        return self._instance.agent_op(op, params)
 
     def setup_controllers(self, specs: list[ControllerSpec]) -> None:
         """

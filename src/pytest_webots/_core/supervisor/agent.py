@@ -2,17 +2,99 @@
 Extern supervisor controller run inside Webots.
 
 Standalone script: imports only the Webots-bundled ``controller`` package and
-the standard library, never pytest_webots itself. Launched with the socket
-address as its only argument; speaks newline-delimited JSON over that socket.
+the standard library, never pytest_webots itself. Launched as
+``agent.py <socket-address> [plugin-file ...]``; speaks newline-delimited JSON
+over that socket.
+
+Plugin files export ``register(agent)`` and add ops to the dispatch table:
+
+    def register(agent):
+        @agent.op("ball_height")
+        def ball_height(agent, request):
+            return agent.supervisor.getFromDef(request["ball"]).getPosition()[2]
+
+Handlers receive the decoded request (handles already resolved to objects) and
+return plain Python; results are encoded centrally, so returning a Webots
+object hands the client a proxy. Registering an existing name, built-ins
+included, replaces it.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import socket
 import sys
 import traceback
+from collections.abc import Callable
 from typing import Any
+
+
+def _op_ping(agent: Agent, request: dict[str, Any]) -> Any:
+    return "pong"
+
+
+def _op_step(agent: Agent, request: dict[str, Any]) -> Any:
+    ms = request.get("ms") or agent.basic_time_step
+    return agent.supervisor.step(int(ms))
+
+
+def _op_reset(agent: Agent, request: dict[str, Any]) -> Any:
+    # simulationReset applies at the end of a step; step to land it, then kill inertia.
+    agent.supervisor.simulationReset()
+    agent.supervisor.step(agent.basic_time_step)
+    agent.supervisor.simulationResetPhysics()
+    return None
+
+
+def _op_reset_physics(agent: Agent, request: dict[str, Any]) -> Any:
+    agent.supervisor.simulationResetPhysics()
+    return None
+
+
+def _op_reload(agent: Agent, request: dict[str, Any]) -> Any:
+    agent.supervisor.worldReload()
+    agent.supervisor.step(agent.basic_time_step)
+    return None
+
+
+def _op_quit(agent: Agent, request: dict[str, Any]) -> Any:
+    agent.supervisor.simulationQuit(int(request.get("status") or 0))
+    agent.supervisor.step(agent.basic_time_step)
+    return None
+
+
+def _op_time(agent: Agent, request: dict[str, Any]) -> Any:
+    return agent.supervisor.getTime()
+
+
+def _op_basic_time_step(agent: Agent, request: dict[str, Any]) -> Any:
+    return agent.basic_time_step
+
+
+def _op_call(agent: Agent, request: dict[str, Any]) -> Any:
+    target = agent.supervisor if request.get("target") is None else agent.handles[request["target"]]
+    method = getattr(target, request["method"])
+    return method(*(request.get("args") or []))
+
+
+def _op_release(agent: Agent, request: dict[str, Any]) -> Any:
+    agent.handles.pop(request["handle"], None)
+    return None
+
+
+_BUILTIN_OPS: dict[str, Callable[[Agent, dict[str, Any]], Any]] = {
+    "ping": _op_ping,
+    "step": _op_step,
+    "reset": _op_reset,
+    "reset_physics": _op_reset_physics,
+    "reload": _op_reload,
+    "quit": _op_quit,
+    "time": _op_time,
+    "basic_time_step": _op_basic_time_step,
+    "call": _op_call,
+    "release": _op_release,
+}
 
 
 class Agent:
@@ -21,6 +103,14 @@ class Agent:
         self.basic_time_step = int(supervisor.getBasicTimeStep())
         self.handles: dict[int, Any] = {}
         self.next_handle = 1
+        self.ops: dict[str, Callable[[Agent, dict[str, Any]], Any]] = dict(_BUILTIN_OPS)
+
+    def op(self, name: str) -> Callable[[Callable[[Agent, dict[str, Any]], Any]], Callable[..., Any]]:
+        def register(handler: Callable[[Agent, dict[str, Any]], Any]) -> Callable[..., Any]:
+            self.ops[name] = handler
+            return handler
+
+        return register
 
     def encode(self, value: Any) -> Any:
         if value is None or isinstance(value, (bool, int, float, str)):
@@ -41,41 +131,20 @@ class Agent:
 
     def dispatch(self, request: dict[str, Any]) -> Any:
         op = request["op"]
-        if op == "ping":
-            return "pong"
-        if op == "step":
-            ms = request.get("ms") or self.basic_time_step
-            return self.supervisor.step(int(ms))
-        if op == "reset":
-            # simulationReset applies at the end of a step; step to land it, then kill inertia.
-            self.supervisor.simulationReset()
-            self.supervisor.step(self.basic_time_step)
-            self.supervisor.simulationResetPhysics()
-            return None
-        if op == "reset_physics":
-            self.supervisor.simulationResetPhysics()
-            return None
-        if op == "reload":
-            self.supervisor.worldReload()
-            self.supervisor.step(self.basic_time_step)
-            return None
-        if op == "quit":
-            self.supervisor.simulationQuit(int(request.get("status") or 0))
-            self.supervisor.step(self.basic_time_step)
-            return None
-        if op == "time":
-            return self.supervisor.getTime()
-        if op == "basic_time_step":
-            return self.basic_time_step
-        if op == "call":
-            target = self.supervisor if request.get("target") is None else self.handles[request["target"]]
-            method = getattr(target, request["method"])
-            args = [self.decode(a) for a in request.get("args") or []]
-            return self.encode(method(*args))
-        if op == "release":
-            self.handles.pop(request["handle"], None)
-            return None
-        raise ValueError(f"unknown op: {op}")
+        handler = self.ops.get(op)
+        if handler is None:
+            raise ValueError(f"unknown op: {op} (available: {', '.join(sorted(self.ops))})")
+        return handler(self, request)
+
+
+def load_plugins(agent: Agent, paths: list[str]) -> None:
+    for index, path in enumerate(paths):
+        spec = importlib.util.spec_from_file_location(f"pytest_webots_agent_plugin_{index}", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load agent plugin {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.register(agent)
 
 
 def make_server(address: str) -> socket.socket:
@@ -99,7 +168,8 @@ def serve(agent: Agent, server: socket.socket) -> None:
                     continue
                 request = json.loads(line)
                 try:
-                    response = {"ok": agent.dispatch(request)}
+                    decoded = {key: agent.decode(value) for key, value in request.items()}
+                    response = {"ok": agent.encode(agent.dispatch(decoded))}
                 except Exception as error:  # noqa: BLE001 - deliver errors to the client, keep serving
                     response = {"error": traceback.format_exc(), "type": type(error).__name__}
                 stream.write(json.dumps(response) + "\n")
@@ -110,8 +180,14 @@ def main() -> None:
     from controller import Supervisor  # type: ignore[import-not-found]  # via PYTHONPATH set by the launcher
 
     supervisor = Supervisor()
+    agent = Agent(supervisor)
+    try:
+        load_plugins(agent, sys.argv[2:])
+    except Exception:  # noqa: BLE001 - any plugin failure must reach the captured output
+        traceback.print_exc()
+        sys.exit(3)
     server = make_server(sys.argv[1])
-    serve(Agent(supervisor), server)
+    serve(agent, server)
 
 
 if __name__ == "__main__":

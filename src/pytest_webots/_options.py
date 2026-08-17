@@ -49,3 +49,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "webots_make",
         help="Path to the make executable (default: make on PATH; on Windows, the Webots-packaged MSYS make).",
     )
+    parser.addini(
+        "webots_agent_plugins",
+        type="paths",
+        help="Python files loaded into the supervisor agent inside Webots; each must define register(agent).",
+    )

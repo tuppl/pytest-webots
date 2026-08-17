@@ -105,6 +105,66 @@ def test_world_args_hook_extends_command(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
 
 
+def test_agent_plugin_end_to_end(pytester: pytest.Pytester) -> None:
+    world = Path(__file__).parent / "worlds" / "minimal.wbt"
+    pytester.makepyfile(
+        agent_ext="""
+        def register(agent):
+            @agent.op("node_z")
+            def node_z(agent, request):
+                return agent.supervisor.getFromDef(request["name"]).getPosition()[2]
+
+            @agent.op("get_node")
+            def get_node(agent, request):
+                return agent.supervisor.getFromDef(request["name"])
+        """
+    )
+    pytester.makeini(
+        """
+        [pytest]
+        webots_agent_plugins = agent_ext.py
+        """
+    )
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        def test_plugin_ops(webots):
+            assert webots.agent_op("node_z", name="BALL") == pytest.approx(1.0)
+            assert webots.ops.node_z(name="BALL") == pytest.approx(1.0)  # method-style equivalent
+            node = webots.ops.get_node(name="BALL")  # object result becomes a proxy
+            assert node.getPosition() == pytest.approx([0.0, 0.0, 1.0])
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+
+
+def test_broken_agent_plugin_fails_boot_with_traceback(pytester: pytest.Pytester) -> None:
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    pytester.makepyfile(agent_ext='raise RuntimeError("boom at import")\n')
+    pytester.makeini(
+        """
+        [pytest]
+        webots_agent_plugins = agent_ext.py
+        """
+    )
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        def test_never_runs(webots):
+            pass
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*agent exited with code 3*"])
+    result.stdout.fnmatch_lines(["*boom at import*"])
+
+
 def test_boot_timeout(tmp_path: Path) -> None:
     settings = Settings(
         home=discover_webots_home(None),
