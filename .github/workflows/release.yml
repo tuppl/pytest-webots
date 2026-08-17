@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+
+      - name: Verify tag matches project version
+        run: |
+          version=$(uv version --short)
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "pyproject version $version does not match release tag $tag"
+            exit 1
+          fi
+
+      - run: uv build
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --title "$GITHUB_REF_NAME"
+          --generate-notes
+          dist/*

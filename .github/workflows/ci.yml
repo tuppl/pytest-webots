@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --locked
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+      - run: uv run --no-sync python -VV
+      - run: uv run --no-sync pytest
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: cyberbotics/webots:R2025a-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: apt-get update && apt-get install -y xvfb build-essential curl
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: xvfb-run -a uv run --no-sync pytest -o webots_startup_timeout=180
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check src tests
+      - run: uv run --no-sync ruff format --check src tests
+      - run: uv run --no-sync mypy
