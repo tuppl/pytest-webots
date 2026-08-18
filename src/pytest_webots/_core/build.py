@@ -1,5 +1,5 @@
 """
-Controller build backends: make, cmake, raw command; caching and locking.
+Controller builds: automatic make, raw command, caching and locking.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from filelock import FileLock
 
 from .config import make_home
 from .errors import BuildError
+from .markers import has_makefile
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -55,13 +56,11 @@ def run_build(spec: ControllerSpec, settings: Settings) -> bool:
 def _backend_command(spec: ControllerSpec, directory: Path, settings: Settings) -> list[list[str]] | None:
     if isinstance(spec.build, tuple):
         return [list(spec.build)]
-    if spec.build == "make" or (spec.build is None and (directory / "Makefile").is_file()):
-        return [[settings.make, "-C", str(directory)]]
     if spec.build is None:
-        return None
+        return [[settings.make, "-C", str(directory)]] if has_makefile(directory) else None
     raise BuildError(
-        f"no built-in backend for build={spec.build!r} ({directory}); built-ins are 'make' and a raw "
-        f"command tuple. Other build systems integrate via the pytest_webots_build_controller hook."
+        f"build={spec.build!r} ({directory}) was not claimed by any pytest_webots_build_controller hook. "
+        f"Pass a command sequence to run it directly, or implement the hook for this build system."
     )
 
 

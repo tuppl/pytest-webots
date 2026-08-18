@@ -97,8 +97,9 @@ class ControllerProcess:
         snapshot = self._instance.connection_generation(self.spec.robot)
         if not self.spec.path.exists():
             raise WebotsError(
-                f"controller binary {self.spec.path} does not exist "
-                f"(build disabled via --webots-no-build or build=False?)"
+                f"controller {self.spec.path} does not exist and no build produced it; "
+                f"check the path, or that a build is configured and not disabled by "
+                f"--webots-no-build or build=False"
             )
         self._proc = subprocess.Popen(
             self.command(),

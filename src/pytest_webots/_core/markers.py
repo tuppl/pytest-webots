@@ -24,6 +24,13 @@ _CONTROLLER_KWARGS = frozenset({"build", "args", "env", "cwd", "autostart", "pro
 ControllerProtocol = Literal["ipc", "tcp"]
 
 
+MAKEFILE_NAMES = ("GNUmakefile", "makefile", "Makefile")  # make's own lookup order
+
+
+def has_makefile(directory: Path) -> bool:
+    return any((directory / name).is_file() for name in MAKEFILE_NAMES)
+
+
 class MarkerError(Exception):
     """
     A webots marker is malformed or names an unresolvable world.
@@ -203,13 +210,13 @@ def _resolve_controller(name: str, item: pytest.Item, rootpath: Path, build: obj
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
-    buildable = build not in (None, False) or (
-        build is None and ((resolved / "Makefile").is_file() or (resolved / "CMakeLists.txt").is_file())
-    )
-    if buildable:
+    if build is not False and (build is not None or has_makefile(resolved)):
         return binary.resolve()
     tried = "\n  ".join(str(c) for c in candidates)
-    raise MarkerError(f"{item.nodeid}: no controller found for {name!r}; tried:\n  {tried}")
+    raise MarkerError(
+        f"{item.nodeid}: no controller found for {name!r}; tried:\n  {tried}\n"
+        f"Nothing there can build one either: add a makefile to {resolved}, or pass build= with a command."
+    )
 
 
 def _resolve_anchored(name: str, item: pytest.Item, rootpath: Path) -> Path:

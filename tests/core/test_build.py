@@ -65,23 +65,40 @@ def test_missing_output_is_an_error(tmp_path: Path, make_settings: MakeSettings)
         run_build(spec, make_settings())
 
 
-def test_unknown_backend_points_at_hook(tmp_path: Path, make_settings: MakeSettings) -> None:
-    spec = ControllerSpec(robot="probe", path=tmp_path / "out.bin", build="cmake")
+@pytest.mark.parametrize("build", ["cmake", "make"])
+def test_unclaimed_build_tag_points_at_hook(build: str, tmp_path: Path, make_settings: MakeSettings) -> None:
+    # No string is a built-in backend, "make" included: strings belong to the hook.
+    spec = ControllerSpec(robot="probe", path=tmp_path / "out.bin", build=build)
     with pytest.raises(BuildError, match="pytest_webots_build_controller"):
         run_build(spec, make_settings())
 
 
-def test_custom_make_path_is_used(tmp_path: Path, make_settings: MakeSettings) -> None:
-    fake_make = tmp_path / "tools" / "my-make"
-    fake_make.parent.mkdir()
-    fake_make.write_text('#!/bin/sh\n[ "$1" = "-C" ] && echo fake > "$2/out.bin"\n')
-    fake_make.chmod(0o755)
+def fake_make(tmp_path: Path) -> Path:
+    executable = tmp_path / "tools" / "my-make"
+    executable.parent.mkdir()
+    executable.write_text('#!/bin/sh\n[ "$1" = "-C" ] && echo fake > "$2/out.bin"\n')
+    executable.chmod(0o755)
+    return executable
+
+
+@pytest.mark.parametrize("makefile", ["Makefile", "GNUmakefile", "makefile"])
+def test_makefile_is_built_automatically(makefile: str, tmp_path: Path, make_settings: MakeSettings) -> None:
+    # Every name make itself looks for is detected, so a project builds the
+    # same way on a case-sensitive filesystem as on a case-insensitive one.
+    executable = fake_make(tmp_path)
     controller = tmp_path / "ctrl"
     controller.mkdir()
-    (controller / "Makefile").write_text("all:\n")
-    spec = ControllerSpec(robot="probe", path=controller / "out.bin", build="make")
-    assert run_build(spec, make_settings(make=str(fake_make))) is True
+    (controller / makefile).write_text("all:\n")
+    spec = ControllerSpec(robot="probe", path=controller / "out.bin")
+    assert run_build(spec, make_settings(make=str(executable))) is True
     assert (controller / "out.bin").read_text().strip() == "fake"
+
+
+def test_no_makefile_means_no_build(tmp_path: Path, make_settings: MakeSettings) -> None:
+    controller = tmp_path / "ctrl"
+    controller.mkdir()
+    spec = ControllerSpec(robot="probe", path=controller / "out.bin")
+    assert run_build(spec, make_settings(make=str(fake_make(tmp_path)))) is False
 
 
 def test_failing_command_raises_with_output(tmp_path: Path, make_settings: MakeSettings) -> None:
