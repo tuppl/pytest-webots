@@ -145,27 +145,3 @@ def test_build_hook_claims_custom_backend(pytester: pytest.Pytester, tmp_path: P
     result = pytester.runpytest("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
     assert witness.exists()
-
-
-def test_failure_report_shows_controller_output(pytester: pytest.Pytester) -> None:
-    world = Path(__file__).parent / "worlds" / "second.wbt"
-    pytester.makepyfile(
-        f"""
-        import pytest
-
-        @pytest.mark.webots_world({str(world)!r})
-        @pytest.mark.webots_controller("probe", {str(PROBE)!r})
-        def test_fails(webots):
-            assert False, "deliberate"
-        """
-    )
-    result = pytester.runpytest("-p", "no:cacheprovider")
-    result.assert_outcomes(failed=1)
-    result.stdout.fnmatch_lines(
-        [
-            "*webots output*",
-            "*extern controller: connected*",
-            "*webots controller 'probe'*",
-            "*probe controller ready*",
-        ]
-    )

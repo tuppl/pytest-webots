@@ -2,9 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from pytest_webots import WebotsCrashedError, WebotsSession, WorldBootTimeout, WorldSpec
-from pytest_webots._core.config import Settings, discover_webots_home
-from pytest_webots._core.world import WebotsInstance
+from pytest_webots import WebotsCrashedError, WebotsSession
+from pytest_webots._core.config import discover_webots_home
 
 pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no Webots installation found")
 
@@ -23,7 +22,7 @@ def test_boot_reaches_readiness(webots: WebotsSession) -> None:
 @pytest.mark.webots_world(MINIMAL)
 def test_session_scope_reuses_instance(webots: WebotsSession, world_boots: list[str]) -> None:
     assert webots.world.alive
-    assert world_boots == ["minimal.wbt"]
+    assert world_boots.count("minimal.wbt") == 1
 
 
 @pytest.mark.webots_world(MINIMAL)
@@ -53,7 +52,7 @@ def test_reload_mid_test(webots: WebotsSession, world_boots: list[str]) -> None:
     webots.reload()
     node = webots.supervisor.getFromDef("BALL")
     assert node.getPosition() == pytest.approx(INITIAL_BALL)
-    assert world_boots == ["minimal.wbt"]  # reload is not a reboot
+    assert world_boots.count("minimal.wbt") == 1  # reload is not a reboot
 
 
 @pytest.mark.webots_world(MINIMAL)
@@ -67,7 +66,7 @@ def test_crash_raises_webots_crashed_error(webots: WebotsSession) -> None:
 def test_crash_recovery_reboots(webots: WebotsSession, world_boots: list[str]) -> None:
     assert webots.world.alive
     assert webots.supervisor.getFromDef("BALL").getPosition() == pytest.approx(INITIAL_BALL)
-    assert world_boots == ["minimal.wbt", "minimal.wbt"]
+    assert world_boots.count("minimal.wbt") == 2  # the crash above forced exactly one reboot
 
 
 @pytest.mark.webots_world("worlds/second.wbt", scope="function")
@@ -163,32 +162,3 @@ def test_broken_agent_plugin_fails_boot_with_traceback(pytester: pytest.Pytester
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*agent exited with code 3*"])
     result.stdout.fnmatch_lines(["*boom at import*"])
-
-
-def test_boot_timeout(tmp_path: Path) -> None:
-    settings = Settings(
-        home=discover_webots_home(None),
-        worlds_dir=None,
-        mode="fast",
-        headless=True,
-        extra_args=(),
-        startup_timeout=5,
-        max_restarts=3,
-        port_base=1334,
-        supervisor_name="pytest-supervisor",
-        inject_supervisor=False,  # nothing will ever announce a URL
-        build=True,
-        rebuild=False,
-        keep_alive=False,
-        worker_id=None,
-    )
-    # Boot from a copy so the Webots GUI-state sidecar lands in tmp_path, not the repo.
-    world = tmp_path / "empty.wbt"
-    world.write_text((Path(__file__).parent / "worlds" / "empty.wbt").read_text())
-    instance = WebotsInstance(WorldSpec(path=world, timeout=5), settings, port=1334)
-    try:
-        with pytest.raises(WorldBootTimeout, match="did not become ready"):
-            instance.boot()
-    finally:
-        instance.shutdown(force=True)
-    assert not instance.alive

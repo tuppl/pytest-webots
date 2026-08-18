@@ -5,11 +5,12 @@ Process table for running Webots instances and port allocation.
 from __future__ import annotations
 
 import re
-import socket
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import pytest
 
+from .ports import PortAllocator
 from .world import WebotsInstance
 
 if TYPE_CHECKING:
@@ -32,23 +33,16 @@ class WorldRegistry:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._instances: dict[WorldSpec, WebotsInstance] = {}
-        self._port_base = settings.port_base + _worker_offset(settings.worker_id)
+        self._ports = PortAllocator(settings.port_base + _worker_offset(settings.worker_id))
 
     def get_or_create(self, spec: WorldSpec) -> tuple[WebotsInstance, bool]:
         instance = self._instances.get(spec)
         if instance is not None:
             return instance, False
-        instance = WebotsInstance(spec, self._settings, port=self._free_port())
+        instance = WebotsInstance(spec, self._settings, port=self._ports.acquire())
+        instance.reallocate_port = self._ports.acquire
         self._instances[spec] = instance
         return instance, True
-
-    def _free_port(self) -> int:
-        taken = {instance.port for instance in self._instances.values()}
-        port = self._port_base
-        while True:
-            if port not in taken and _port_available(port):
-                return port
-            port += 1
 
     def sweep(self) -> None:
         """
@@ -57,16 +51,8 @@ class WorldRegistry:
         if self._settings.keep_alive:
             return
         for instance in self._instances.values():
-            instance.shutdown()
-
-
-def _port_available(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError:
-            return False
-    return True
+            with suppress(Exception):  # one failure must not strand the rest
+                instance.shutdown()
 
 
 REGISTRY_KEY: pytest.StashKey[WorldRegistry] = pytest.StashKey()

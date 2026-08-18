@@ -27,3 +27,9 @@ class BuildError(WebotsError):
     """
     A controller build failed or produced no output.
     """
+
+
+class PortAllocationError(WebotsError):
+    """
+    No usable port was found, either by the allocator or by Webots itself.
+    """

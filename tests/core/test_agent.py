@@ -1,7 +1,3 @@
-"""
-Unit tests for the in-Webots agent, driven with a fake Supervisor.
-"""
-
 from pathlib import Path
 
 import pytest
