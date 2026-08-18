@@ -10,7 +10,9 @@ MINIMAL = WORLDS / "minimal.wbt"
 SECOND = WORLDS / "second.wbt"
 
 
-def test_group_markers_added_per_world(pytester: pytest.Pytester, tmp_path: Path) -> None:
+def test_group_markers_added_per_world(pytester: pytest.Pytester, tmp_path: Path, place_world) -> None:
+    minimal = place_world(MINIMAL, "worlds/minimal.wbt")
+    second = place_world(SECOND, "worlds/second.wbt")
     groups_file = tmp_path / "groups.json"
     pytester.makeconftest(
         f"""
@@ -31,8 +33,8 @@ def test_group_markers_added_per_world(pytester: pytest.Pytester, tmp_path: Path
         f"""
         import pytest
 
-        @pytest.mark.webots_world({str(SECOND)!r})
-        @pytest.mark.webots_world({str(MINIMAL)!r})
+        @pytest.mark.webots_world({second!r})
+        @pytest.mark.webots_world({minimal!r})
         def test_grouped(webots_world):
             pass
 
@@ -43,8 +45,10 @@ def test_group_markers_added_per_world(pytester: pytest.Pytester, tmp_path: Path
     result = pytester.runpytest("--collect-only", "-q", "-p", "no:cacheprovider")
     assert result.ret == 0
     groups = json.loads(groups_file.read_text())
-    assert groups["test_group_markers_added_per_world.py::test_grouped[minimal]"] == f"webots:{MINIMAL}"
-    assert groups["test_group_markers_added_per_world.py::test_grouped[second]"] == f"webots:{SECOND}"
+    nodeid = "test_group_markers_added_per_world.py::test_grouped"
+    # Grouping keys on the resolved path, not the id, so two spellings share a worker.
+    assert groups[f"{nodeid}[{minimal}]"] == f"webots:{pytester.path / minimal}"
+    assert groups[f"{nodeid}[{second}]"] == f"webots:{pytester.path / second}"
     assert "test_group_markers_added_per_world.py::test_ungrouped" not in groups
 
 

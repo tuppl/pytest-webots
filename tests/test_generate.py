@@ -8,13 +8,15 @@ SECOND = WORLDS / "second.wbt"
 VARIANT = WORLDS / "variant" / "minimal.wbt"
 
 
-def test_world_ids_compose_with_parametrize(pytester: pytest.Pytester) -> None:
+def test_world_ids_compose_with_parametrize(pytester: pytest.Pytester, place_world) -> None:
+    minimal = place_world(MINIMAL, "worlds/minimal.wbt")
+    second = place_world(SECOND, "worlds/second.wbt")
     pytester.makepyfile(
         f"""
         import pytest
 
-        @pytest.mark.webots_world({str(SECOND)!r})
-        @pytest.mark.webots_world({str(MINIMAL)!r})  # bottom-most marker applies first, like stacked parametrize
+        @pytest.mark.webots_world({second!r})
+        @pytest.mark.webots_world({minimal!r})  # bottom-most marker applies first, like stacked parametrize
         @pytest.mark.parametrize("speed", [1.0, 2.0])
         def test_drive(webots_world, speed):
             pass
@@ -23,23 +25,25 @@ def test_world_ids_compose_with_parametrize(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest("--collect-only", "-q")
     result.stdout.fnmatch_lines(
         [
-            "*test_drive?minimal-1.0?*",
-            "*test_drive?minimal-2.0?*",
-            "*test_drive?second-1.0?*",
-            "*test_drive?second-2.0?*",
+            "*test_drive?worlds/minimal.wbt-1.0?*",
+            "*test_drive?worlds/minimal.wbt-2.0?*",
+            "*test_drive?worlds/second.wbt-1.0?*",
+            "*test_drive?worlds/second.wbt-2.0?*",
         ],
         consecutive=True,
     )
 
 
-def test_collection_groups_by_world(pytester: pytest.Pytester) -> None:
+def test_collection_groups_by_world(pytester: pytest.Pytester, place_world) -> None:
+    minimal = place_world(MINIMAL, "worlds/minimal.wbt")
+    second = place_world(SECOND, "worlds/second.wbt")
     pytester.makepyfile(
         f"""
         import pytest
 
         pytestmark = [
-            pytest.mark.webots_world({str(MINIMAL)!r}),
-            pytest.mark.webots_world({str(SECOND)!r}),
+            pytest.mark.webots_world({minimal!r}),
+            pytest.mark.webots_world({second!r}),
         ]
 
         def test_one(webots_world):
@@ -52,45 +56,49 @@ def test_collection_groups_by_world(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest("--collect-only", "-q")
     result.stdout.fnmatch_lines(
         [
-            "*test_one?minimal?*",
-            "*test_two?minimal?*",
-            "*test_one?second?*",
-            "*test_two?second?*",
+            "*test_one?worlds/minimal.wbt?*",
+            "*test_two?worlds/minimal.wbt?*",
+            "*test_one?worlds/second.wbt?*",
+            "*test_two?worlds/second.wbt?*",
         ],
         consecutive=True,
     )
 
 
-def test_closest_node_overrides_module_marker(pytester: pytest.Pytester) -> None:
+def test_closest_node_overrides_module_marker(pytester: pytest.Pytester, place_world) -> None:
+    minimal = place_world(MINIMAL, "worlds/minimal.wbt")
+    second = place_world(SECOND, "worlds/second.wbt")
     pytester.makepyfile(
         f"""
         import pytest
 
-        pytestmark = pytest.mark.webots_world({str(MINIMAL)!r})
+        pytestmark = pytest.mark.webots_world({minimal!r})
 
-        @pytest.mark.webots_world({str(SECOND)!r})
+        @pytest.mark.webots_world({second!r})
         def test_own_world(webots_world):
             pass
         """
     )
     result = pytester.runpytest("--collect-only", "-q")
-    result.stdout.fnmatch_lines(["*test_own_world?second?*"])
-    result.stdout.no_fnmatch_line("*test_own_world?minimal?*")
+    result.stdout.fnmatch_lines(["*test_own_world?worlds/second.wbt?*"])
+    result.stdout.no_fnmatch_line("*test_own_world?worlds/minimal.wbt?*")
 
 
-def test_stem_collision_prefixes_parent(pytester: pytest.Pytester) -> None:
+def test_same_stem_in_different_directories(pytester: pytest.Pytester, place_world) -> None:
+    here = place_world(MINIMAL, "worlds/minimal.wbt")
+    variant = place_world(VARIANT, "worlds/variant/minimal.wbt")
     pytester.makepyfile(
         f"""
         import pytest
 
-        @pytest.mark.webots_world({str(VARIANT)!r})
-        @pytest.mark.webots_world({str(MINIMAL)!r})
+        @pytest.mark.webots_world({variant!r})
+        @pytest.mark.webots_world({here!r})
         def test_collide(webots_world):
             pass
         """
     )
     result = pytester.runpytest("--collect-only", "-q")
-    result.stdout.fnmatch_lines(["*test_collide?worlds-minimal?*", "*test_collide?variant-minimal?*"])
+    result.stdout.fnmatch_lines(["*test_collide?worlds/minimal.wbt?*", "*test_collide?worlds/variant/minimal.wbt?*"])
 
 
 def test_duplicate_world_errors(pytester: pytest.Pytester) -> None:
@@ -141,7 +149,7 @@ def test_worlds_dir_ini_resolution(pytester: pytest.Pytester) -> None:
         """
     )
     result = pytester.runpytest("--collect-only", "-q")
-    result.stdout.fnmatch_lines(["*test_from_dir?minimal?*"])
+    result.stdout.fnmatch_lines(["*test_from_dir?minimal.wbt?*"])
 
 
 def test_resolve_world_hook_wins(pytester: pytest.Pytester) -> None:
@@ -164,7 +172,7 @@ def test_resolve_world_hook_wins(pytester: pytest.Pytester) -> None:
         """
     )
     result = pytester.runpytest("--collect-only", "-q")
-    result.stdout.fnmatch_lines(["*test_hooked?second?*"])
+    result.stdout.fnmatch_lines(["*test_hooked?virtual?*"])  # the alias, not the file it resolved to
 
 
 def test_no_marker_skips(pytester: pytest.Pytester) -> None:

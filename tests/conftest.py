@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,21 @@ def pytest_webots_world_started(instance: WebotsInstance) -> None:
 @pytest.fixture
 def world_boots() -> list[str]:
     return BOOTS
+
+
+@pytest.fixture
+def place_world(pytester: pytest.Pytester) -> Callable[[Path, str], str]:
+    """
+    Copy a world into the pytester project.
+    """
+
+    def place(source: Path, dest: str) -> str:
+        target = pytester.path / dest
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.read_text())
+        return dest
+
+    return place
 
 
 @pytest.fixture

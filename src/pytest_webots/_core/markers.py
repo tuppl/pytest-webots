@@ -44,6 +44,7 @@ class WorldSpec:
     mode: str | None = None
     args: tuple[str, ...] = ()
     timeout: float | None = None
+    label: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ def _world_spec(
         mode=mark.kwargs.get("mode"),
         args=args,
         timeout=float(timeout) if timeout is not None else None,
+        label=name,
     )
 
 
@@ -239,14 +241,7 @@ def _resolve_anchored(name: str, item: pytest.Item, rootpath: Path) -> Path:
 
 
 def world_ids(specs: Sequence[WorldSpec]) -> list[str]:
-    """
-    World IDs from file stems; parent-directory prefixes disambiguate colliding stems.
-    """
-    stems = [spec.path.stem for spec in specs]
-    ids = []
-    for spec, stem in zip(specs, stems):
-        ids.append(f"{spec.path.parent.name}-{stem}" if stems.count(stem) > 1 else stem)
-    return ids
+    return [spec.label or spec.path.stem for spec in specs]
 
 
 def widest_scope(specs: Sequence[WorldSpec]) -> WorldScope:
