@@ -35,7 +35,7 @@ def test_group_markers_added_per_world(pytester: pytest.Pytester, tmp_path: Path
 
         @pytest.mark.webots_world({second!r})
         @pytest.mark.webots_world({minimal!r})
-        def test_grouped(webots_world):
+        def test_grouped(webots):
             pass
 
         def test_ungrouped():

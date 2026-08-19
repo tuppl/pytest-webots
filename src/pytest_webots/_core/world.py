@@ -69,7 +69,7 @@ class WebotsInstance:
         self._announced_port: int | None = None
 
     @property
-    def world(self) -> str:
+    def world_path(self) -> str:
         return str(self.spec.path)
 
     @property
@@ -109,7 +109,7 @@ class WebotsInstance:
             return
         if self._boot_failures >= self.settings.max_restarts:
             raise WebotsError(
-                f"world {self.world} failed to boot {self._boot_failures} consecutive times; giving up"
+                f"world {self.world_path} failed to boot {self._boot_failures} consecutive times; giving up"
             ) from self._boot_error
         if not ports.available(self.port):
             self._reallocate_port()  # something took the port while this instance was down
@@ -211,9 +211,9 @@ class WebotsInstance:
                 self._adopt_port(announced)
                 return
             if not self.alive:
-                raise self._boot_failure(f"Webots exited while booting {self.world}")
+                raise self._boot_failure(f"Webots exited while booting {self.world_path}")
             time.sleep(0.05)
-        raise self._boot_failure(f"world {self.world} did not become ready within {timeout:.0f}s", timeout=True)
+        raise self._boot_failure(f"world {self.world_path} did not become ready within {timeout:.0f}s", timeout=True)
 
     def _adopt_port(self, announced: int | None) -> None:
         """
@@ -239,7 +239,7 @@ class WebotsInstance:
         output = self.output()
         if match := _PORT_RANGE_RE.search(output):
             return PortAllocationError(
-                f"Webots found no free port in [{match.group(1)}, {match.group(2)}] for {self.world}:\n{output}"
+                f"Webots found no free port in [{match.group(1)}, {match.group(2)}] for {self.world_path}:\n{output}"
             )
         if timeout:
             return WorldBootTimeout(f"{summary}:\n{output}")
@@ -320,7 +320,9 @@ class WebotsInstance:
         try:
             self._client.connect(timeout=self.settings.startup_timeout, abort=abort)
         except AgentConnectionError as error:
-            raise WebotsError(f"supervisor agent failed to start for {self.world}: {error}\n{self.output()}") from error
+            raise WebotsError(
+                f"supervisor agent failed to start for {self.world_path}: {error}\n{self.output()}"
+            ) from error
 
     def _request(self, payload: dict[str, Any], expect_disconnect: bool = False) -> Any:
         if self._client is None:
@@ -340,7 +342,7 @@ class WebotsInstance:
         An agent RPC failed: Webots died, or it hung. Either way this instance
         is done; reap everything and surface a crash.
         """
-        crash = WebotsCrashedError(f"Webots crashed or hung while running {self.world}:\n{self.output()}")
+        crash = WebotsCrashedError(f"Webots crashed or hung while running {self.world_path}:\n{self.output()}")
         crash.__cause__ = error
         if self.on_crashed is not None:
             self.on_crashed(crash)

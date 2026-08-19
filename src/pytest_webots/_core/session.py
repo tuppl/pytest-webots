@@ -92,7 +92,7 @@ class WebotsSession:
         unknown = [spec.robot for spec in specs if spec.robot not in known]
         if unknown:
             raise WebotsError(
-                f"no robot named {', '.join(repr(r) for r in unknown)} in {self._instance.world}; "
+                f"no robot named {', '.join(repr(r) for r in unknown)} in {self._instance.world_path}; "
                 f"extern robots available: {sorted(known) or 'none'}"
             )
         for spec in specs:
@@ -131,7 +131,7 @@ class WebotsSession:
             )
             if robot not in self._instance.robots:
                 raise WebotsError(
-                    f"no robot named {robot!r} in {self._instance.world}; "
+                    f"no robot named {robot!r} in {self._instance.world_path}; "
                     f"extern robots available: {sorted(self._instance.robots) or 'none'}"
                 )
         return self._launch(spec)

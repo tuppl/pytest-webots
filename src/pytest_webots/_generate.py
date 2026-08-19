@@ -10,7 +10,7 @@ from ._core.markers import collect_world_specs, widest_scope, world_ids
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    if "webots_world" not in metafunc.fixturenames:
+    if "_webots_world" not in metafunc.fixturenames:
         return
     config = metafunc.config
 
@@ -20,4 +20,4 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     specs = collect_world_specs(metafunc.definition, config.stash[SETTINGS_KEY], config.rootpath, resolve_hook)
     if not specs:
         return
-    metafunc.parametrize("webots_world", specs, indirect=True, ids=world_ids(specs), scope=widest_scope(specs))
+    metafunc.parametrize("_webots_world", specs, indirect=True, ids=world_ids(specs), scope=widest_scope(specs))

@@ -11,6 +11,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         callspec = getattr(item, "callspec", None)
         if callspec is None:
             continue
-        spec = callspec.params.get("webots_world")
+        spec = callspec.params.get("_webots_world")
         if spec is not None:
             item.add_marker(pytest.mark.xdist_group(f"webots:{spec.path}"))

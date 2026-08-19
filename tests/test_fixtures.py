@@ -76,12 +76,6 @@ def test_function_scope_reboots_each_test(webots: WebotsSession, world_boots: li
     assert world_boots.count("second.wbt") == run
 
 
-@pytest.mark.webots_world("worlds/second.wbt", scope="function")
-@pytest.mark.parametrize("run", [1, 2])
-def test_bare_webots_world_revives_after_scope_teardown(webots_world, run: int) -> None:
-    assert webots_world.alive
-
-
 def test_world_args_hook_extends_command(pytester: pytest.Pytester) -> None:
     world = Path(__file__).parent / "worlds" / "second.wbt"
     pytester.makeconftest(
@@ -95,9 +89,9 @@ def test_world_args_hook_extends_command(pytester: pytest.Pytester) -> None:
         import pytest
 
         @pytest.mark.webots_world({str(world)!r})
-        def test_cmd(webots_world):
-            assert "--heartbeat=5000" in webots_world.command()
-            assert webots_world.alive
+        def test_cmd(webots):
+            assert "--heartbeat=5000" in webots.world.command()
+            assert webots.world.alive
         """
     )
     result = pytester.runpytest("-p", "no:cacheprovider")

@@ -20,7 +20,7 @@ SESSION_KEY: pytest.StashKey[WebotsSession] = pytest.StashKey()
 
 
 @pytest.fixture(scope="session")
-def webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
+def _webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
     spec = getattr(request, "param", None)
     if spec is None:
         pytest.skip("test requires a @pytest.mark.webots_world marker")
@@ -42,17 +42,17 @@ def webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
 
 
 @pytest.fixture
-def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iterator[WebotsSession]:
-    scope = webots_world.spec.scope
+def webots(_webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iterator[WebotsSession]:
+    scope = _webots_world.spec.scope
     if scope == "function":
-        request.addfinalizer(webots_world.shutdown)
+        request.addfinalizer(_webots_world.shutdown)
     elif scope in ("class", "module"):
         # Narrower than the parametrize scope.
         node_type = pytest.Class if scope == "class" else pytest.Module
         node = request.node.getparent(node_type)
         if node is not None:
-            node.addfinalizer(webots_world.shutdown)
-    webots_world.ensure_running()
+            node.addfinalizer(_webots_world.shutdown)
+    _webots_world.ensure_running()
 
     config = request.config
     settings = config.stash[SETTINGS_KEY]
@@ -62,10 +62,10 @@ def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iter
             return
         run_build(spec, settings)
 
-    session = WebotsSession(webots_world, builder=builder)
+    session = WebotsSession(_webots_world, builder=builder)
     request.node.stash[SESSION_KEY] = session
     specs = collect_controller_specs(request.node, config.rootpath)
-    for extra in config.hook.pytest_webots_controllers(item=request.node, instance=webots_world):
+    for extra in config.hook.pytest_webots_controllers(item=request.node, instance=_webots_world):
         specs.extend(extra)
     session.setup_controllers(specs)
 
@@ -73,6 +73,6 @@ def webots(webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iter
 
     # Reset while controllers are still connected: a dangling synchronous robot
     # would block the simulation and hang the reset's landing step.
-    if scope != "function" and webots_world.alive:
-        webots_world.reset()
+    if scope != "function" and _webots_world.alive:
+        _webots_world.reset()
     session.terminate_controllers()

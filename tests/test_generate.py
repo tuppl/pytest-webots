@@ -18,7 +18,7 @@ def test_world_ids_compose_with_parametrize(pytester: pytest.Pytester, place_wor
         @pytest.mark.webots_world({second!r})
         @pytest.mark.webots_world({minimal!r})  # bottom-most marker applies first, like stacked parametrize
         @pytest.mark.parametrize("speed", [1.0, 2.0])
-        def test_drive(webots_world, speed):
+        def test_drive(webots, speed):
             pass
         """
     )
@@ -46,10 +46,10 @@ def test_collection_groups_by_world(pytester: pytest.Pytester, place_world) -> N
             pytest.mark.webots_world({second!r}),
         ]
 
-        def test_one(webots_world):
+        def test_one(webots):
             pass
 
-        def test_two(webots_world):
+        def test_two(webots):
             pass
         """
     )
@@ -75,7 +75,7 @@ def test_closest_node_overrides_module_marker(pytester: pytest.Pytester, place_w
         pytestmark = pytest.mark.webots_world({minimal!r})
 
         @pytest.mark.webots_world({second!r})
-        def test_own_world(webots_world):
+        def test_own_world(webots):
             pass
         """
     )
@@ -93,7 +93,7 @@ def test_same_stem_in_different_directories(pytester: pytest.Pytester, place_wor
 
         @pytest.mark.webots_world({variant!r})
         @pytest.mark.webots_world({here!r})
-        def test_collide(webots_world):
+        def test_collide(webots):
             pass
         """
     )
@@ -108,7 +108,7 @@ def test_duplicate_world_errors(pytester: pytest.Pytester) -> None:
 
         @pytest.mark.webots_world({str(MINIMAL)!r})
         @pytest.mark.webots_world({str(MINIMAL)!r}, scope="function")
-        def test_dup(webots_world):
+        def test_dup(webots):
             pass
         """
     )
@@ -124,7 +124,7 @@ def test_invalid_mode_errors(pytester: pytest.Pytester, place_world) -> None:
         import pytest
 
         @pytest.mark.webots_world({world!r}, mode="fastt")
-        def test_typo(webots_world):
+        def test_typo(webots):
             pass
         """
     )
@@ -139,7 +139,7 @@ def test_unresolvable_world_lists_attempts(pytester: pytest.Pytester) -> None:
         import pytest
 
         @pytest.mark.webots_world("missing.wbt")
-        def test_missing(webots_world):
+        def test_missing(webots):
             pass
         """
     )
@@ -160,7 +160,7 @@ def test_worlds_dir_ini_resolution(pytester: pytest.Pytester) -> None:
         import pytest
 
         @pytest.mark.webots_world("minimal.wbt")
-        def test_from_dir(webots_world):
+        def test_from_dir(webots):
             pass
         """
     )
@@ -183,7 +183,7 @@ def test_resolve_world_hook_wins(pytester: pytest.Pytester) -> None:
         import pytest
 
         @pytest.mark.webots_world("virtual")
-        def test_hooked(webots_world):
+        def test_hooked(webots):
             pass
         """
     )
@@ -194,7 +194,7 @@ def test_resolve_world_hook_wins(pytester: pytest.Pytester) -> None:
 def test_no_marker_skips(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(
         """
-        def test_bare(webots_world):
+        def test_bare(webots):
             pass
         """
     )
