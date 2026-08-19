@@ -15,8 +15,10 @@ Plugin files export ``register(agent)`` and add ops to the dispatch table:
 
 Handlers receive the decoded request (handles already resolved to objects) and
 return plain Python; results are encoded centrally, so returning a Webots
-object hands the client a proxy. Registering an existing name, built-ins
-included, replaces it.
+object hands the client a proxy while scalars, lists and dicts cross as
+themselves. ``__handle__`` is reserved as the proxy marker and must not appear
+as a key in returned data. Registering an existing name, built-ins included,
+replaces it.
 """
 
 from __future__ import annotations
@@ -117,14 +119,18 @@ class Agent:
             return value
         if isinstance(value, (list, tuple)):
             return [self.encode(v) for v in value]
+        if isinstance(value, dict):
+            return {key: self.encode(v) for key, v in value.items()}
         handle = self.next_handle
         self.next_handle += 1
         self.handles[handle] = value
-        return {"__handle__": handle, "__type__": type(value).__name__}
+        return {"__handle__": handle}
 
     def decode(self, value: Any) -> Any:
         if isinstance(value, dict) and "__handle__" in value:
             return self.handles[value["__handle__"]]
+        if isinstance(value, dict):
+            return {key: self.decode(v) for key, v in value.items()}
         if isinstance(value, list):
             return [self.decode(v) for v in value]
         return value

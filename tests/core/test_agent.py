@@ -1,8 +1,15 @@
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from pytest_webots._core.supervisor.agent import Agent, load_plugins
+from pytest_webots._core.supervisor.proxy import SupervisorProxy, decode_result, encode_args
+
+
+def _no_call(handle: int | None, method: str, args: list[Any]) -> Any:
+    raise AssertionError("proxy should not be invoked in these tests")
 
 
 class FakeSupervisor:
@@ -35,11 +42,30 @@ def test_builtin_ops(agent: Agent) -> None:
 
 def test_call_and_handle_lifecycle(agent: Agent) -> None:
     result = agent.encode(agent.dispatch({"op": "call", "target": None, "method": "getSelf", "args": []}))
-    assert result["__handle__"] == 1
-    assert result["__type__"] == "object"
+    assert result == {"__handle__": 1}
     assert 1 in agent.handles
     agent.dispatch({"op": "release", "handle": 1})
     assert 1 not in agent.handles
+
+
+def test_dict_result_crosses_as_data(agent: Agent) -> None:
+    wire = json.loads(json.dumps(agent.encode({"speed": 1.5, "pose": [1, 2, 3], "ok": True})))
+    assert decode_result(wire, _no_call) == {"speed": 1.5, "pose": [1, 2, 3], "ok": True}
+
+
+def test_dict_result_carries_nested_proxies(agent: Agent) -> None:
+    node = agent.dispatch({"op": "call", "target": None, "method": "getSelf", "args": []})
+    wire = json.loads(json.dumps(agent.encode({"node": node, "height": 0.5})))
+    result = decode_result(wire, _no_call)
+    assert isinstance(result["node"], SupervisorProxy)
+    assert result["height"] == 0.5
+
+
+def test_dict_argument_resolves_nested_proxies(agent: Agent) -> None:
+    node = agent.dispatch({"op": "call", "target": None, "method": "getSelf", "args": []})
+    handle = agent.encode(node)["__handle__"]
+    payload = encode_args([{"target": SupervisorProxy(_no_call, handle=handle), "threshold": 0.01}])[0]
+    assert agent.decode(json.loads(json.dumps(payload))) == {"target": node, "threshold": 0.01}
 
 
 def test_unknown_op_lists_available(agent: Agent) -> None:

@@ -121,21 +121,25 @@ class SupervisorProxy:
         return f"<SupervisorProxy {target}>"
 
 
+def _encode_arg(arg: Any) -> Any:
+    if isinstance(arg, SupervisorProxy):
+        return {"__handle__": arg._handle}
+    if isinstance(arg, (list, tuple)):
+        return [_encode_arg(a) for a in arg]
+    if isinstance(arg, dict):
+        return {key: _encode_arg(value) for key, value in arg.items()}
+    return arg
+
+
 def encode_args(args: list[Any]) -> list[Any]:
-    out: list[Any] = []
-    for arg in args:
-        if isinstance(arg, SupervisorProxy):
-            out.append({"__handle__": arg._handle})
-        elif isinstance(arg, (list, tuple)):
-            out.append(encode_args(list(arg)))
-        else:
-            out.append(arg)
-    return out
+    return [_encode_arg(arg) for arg in args]
 
 
 def decode_result(value: Any, call: Callable[[int | None, str, list[Any]], Any]) -> Any:
     if isinstance(value, dict) and "__handle__" in value:
         return SupervisorProxy(call, handle=value["__handle__"])
+    if isinstance(value, dict):
+        return {key: decode_result(v, call) for key, v in value.items()}
     if isinstance(value, list):
         return [decode_result(v, call) for v in value]
     return value
