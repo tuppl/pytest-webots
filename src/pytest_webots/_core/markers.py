@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 WorldScope = Literal["function", "class", "module", "session"]
 SCOPE_ORDER: tuple[WorldScope, ...] = ("function", "class", "module", "session")
+SIMULATION_MODES: tuple[str, ...] = ("pause", "realtime", "fast")
 
 _WORLD_KWARGS = frozenset({"scope", "mode", "args", "timeout"})
 _CONTROLLER_KWARGS = frozenset({"build", "args", "env", "cwd", "autostart", "protocol", "ip_address"})
@@ -107,6 +108,9 @@ def _world_spec(
     scope = mark.kwargs.get("scope", "session")
     if scope not in SCOPE_ORDER:
         raise MarkerError(f"{definition.nodeid}: webots_world scope must be one of {SCOPE_ORDER}, got {scope!r}")
+    mode = mark.kwargs.get("mode")
+    if mode is not None and mode not in SIMULATION_MODES:
+        raise MarkerError(f"{definition.nodeid}: webots_world mode must be one of {SIMULATION_MODES}, got {mode!r}")
     name = str(mark.args[0])
     path = _resolve_world(name, definition, settings, rootpath, resolve_hook)
     args = tuple(str(a) for a in mark.kwargs.get("args") or ())
@@ -114,7 +118,7 @@ def _world_spec(
     return WorldSpec(
         path=path,
         scope=scope,
-        mode=mark.kwargs.get("mode"),
+        mode=mode,
         args=args,
         timeout=float(timeout) if timeout is not None else None,
         label=name,

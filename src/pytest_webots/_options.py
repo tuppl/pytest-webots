@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from ._core.markers import SIMULATION_MODES
+
 
 @pytest.hookimpl
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -10,7 +12,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption("--webots-gui", action="store_true", help="Run Webots with its GUI instead of headless.")
     group.addoption(
         "--webots-mode",
-        choices=("pause", "realtime", "fast"),
+        choices=SIMULATION_MODES,
         help="Simulation mode (overrides the webots_mode ini value).",
     )
     group.addoption(

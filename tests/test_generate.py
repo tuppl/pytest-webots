@@ -117,6 +117,22 @@ def test_duplicate_world_errors(pytester: pytest.Pytester) -> None:
     result.stdout.fnmatch_lines(["*more than once*"])
 
 
+def test_invalid_mode_errors(pytester: pytest.Pytester, place_world) -> None:
+    world = place_world(MINIMAL, "worlds/minimal.wbt")
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.webots_world({world!r}, mode="fastt")
+        def test_typo(webots_world):
+            pass
+        """
+    )
+    result = pytester.runpytest("--collect-only")
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*mode must be one of*'fastt'*"])
+
+
 def test_unresolvable_world_lists_attempts(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(
         """
