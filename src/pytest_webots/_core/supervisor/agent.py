@@ -17,8 +17,8 @@ Handlers receive the decoded request (handles already resolved to objects) and
 return plain Python; results are encoded centrally, so returning a Webots
 object hands the client a proxy while scalars, lists and dicts cross as
 themselves. ``__handle__`` is reserved as the proxy marker and must not appear
-as a key in returned data. Registering an existing name, built-ins included,
-replaces it.
+as a key in returned data. Built-in names are reserved; a plugin claiming one
+raises, but plugins may replace ops registered by earlier plugins.
 """
 
 from __future__ import annotations
@@ -108,6 +108,12 @@ class Agent:
         self.ops: dict[str, Callable[[Agent, dict[str, Any]], Any]] = dict(_BUILTIN_OPS)
 
     def op(self, name: str) -> Callable[[Callable[[Agent, dict[str, Any]], Any]], Callable[..., Any]]:
+        if name in _BUILTIN_OPS:
+            raise ValueError(
+                f"cannot replace built-in op {name!r}; the plugin must pick another name. "
+                f"Built-ins are: {', '.join(sorted(_BUILTIN_OPS))}"
+            )
+
         def register(handler: Callable[[Agent, dict[str, Any]], Any]) -> Callable[..., Any]:
             self.ops[name] = handler
             return handler

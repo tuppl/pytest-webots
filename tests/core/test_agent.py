@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from pytest_webots._core.supervisor.agent import _BUILTIN_OPS as BUILTIN_OPS
 from pytest_webots._core.supervisor.agent import Agent, load_plugins
 from pytest_webots._core.supervisor.proxy import SupervisorProxy, decode_result, encode_args
 
@@ -73,7 +74,7 @@ def test_unknown_op_lists_available(agent: Agent) -> None:
         agent.dispatch({"op": "warp"})
 
 
-def test_plugin_registers_and_overrides(agent: Agent, tmp_path: Path) -> None:
+def test_plugin_registers_op(agent: Agent, tmp_path: Path) -> None:
     plugin = tmp_path / "ext.py"
     plugin.write_text(
         """
@@ -81,15 +82,54 @@ def register(agent):
     @agent.op("double")
     def double(agent, request):
         return request["x"] * 2
-
-    @agent.op("ping")
-    def ping(agent, request):
-        return "overridden"
 """
     )
     load_plugins(agent, [str(plugin)])
     assert agent.dispatch({"op": "double", "x": 21}) == 42
-    assert agent.dispatch({"op": "ping"}) == "overridden"
+
+
+@pytest.mark.parametrize("name", sorted(BUILTIN_OPS))
+def test_builtin_ops_cannot_be_replaced(agent: Agent, name: str) -> None:
+    with pytest.raises(ValueError, match=f"cannot replace built-in op '{name}'"):
+        agent.op(name)
+    assert agent.ops[name] is BUILTIN_OPS[name]
+
+
+def test_plugin_claiming_builtin_fails_to_load(agent: Agent, tmp_path: Path) -> None:
+    plugin = tmp_path / "clash.py"
+    plugin.write_text(
+        """
+def register(agent):
+    @agent.op("reset")
+    def reset(agent, request):
+        return None
+"""
+    )
+    with pytest.raises(ValueError, match="cannot replace built-in op 'reset'"):
+        load_plugins(agent, [str(plugin)])
+
+
+def test_later_plugin_replaces_earlier_op(agent: Agent, tmp_path: Path) -> None:
+    first = tmp_path / "first.py"
+    first.write_text(
+        """
+def register(agent):
+    @agent.op("greet")
+    def greet(agent, request):
+        return "first"
+"""
+    )
+    second = tmp_path / "second.py"
+    second.write_text(
+        """
+def register(agent):
+    @agent.op("greet")
+    def greet(agent, request):
+        return "second"
+"""
+    )
+    load_plugins(agent, [str(first), str(second)])
+    assert agent.dispatch({"op": "greet"}) == "second"
 
 
 def test_broken_plugin_raises(agent: Agent, tmp_path: Path) -> None:
