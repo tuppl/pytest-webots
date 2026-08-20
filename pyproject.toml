@@ -1,6 +1,6 @@
 [project]
 name = "pytest-webots"
-version = "0.1.0"
+version = "0.1.1"
 description = "pytest plugin for running Webots simulation with tests"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,11 +32,11 @@ dev = [
 requires = ["uv_build>=0.9.17,<0.10.0"]
 build-backend = "uv_build"
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.mypy]
 files = ["src/pytest_webots"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
