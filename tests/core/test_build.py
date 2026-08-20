@@ -107,3 +107,49 @@ def test_failing_command_raises_with_output(tmp_path: Path, make_settings: MakeS
     with pytest.raises(BuildError, match="code 9") as excinfo:
         run_build(spec, make_settings())
     assert "broken" in str(excinfo.value)
+
+
+def failing_counted_spec(tmp_path: Path) -> tuple[ControllerSpec, Path]:
+    counter = tmp_path / "count.txt"  # outside the controller directory, so it never perturbs the source digest
+    controller = tmp_path / "ctrl"
+    controller.mkdir()
+    (controller / "src.txt").write_text("v1")
+    spec = ControllerSpec(
+        robot="probe",
+        path=controller / "out.bin",
+        build=("sh", "-c", f"echo x >> {counter}; echo broken; exit 9"),
+    )
+    return spec, counter
+
+
+def test_failure_is_cached_by_digest(tmp_path: Path, make_settings: MakeSettings) -> None:
+    spec, counter = failing_counted_spec(tmp_path)
+    settings = make_settings()
+    with pytest.raises(BuildError, match="broken"):
+        run_build(spec, settings)
+    with pytest.raises(BuildError, match="cached failure") as excinfo:
+        run_build(spec, settings)
+    assert "broken" in str(excinfo.value)  # replay carries the original output
+    assert counter.read_text() == "x\n"  # the failing build ran once
+
+
+def test_source_change_rearms_a_failed_build(tmp_path: Path, make_settings: MakeSettings) -> None:
+    spec, counter = failing_counted_spec(tmp_path)
+    settings = make_settings()
+    with pytest.raises(BuildError):
+        run_build(spec, settings)
+    source = spec.path.parent / "src.txt"
+    source.write_text("v2")
+    os.utime(source, ns=(source.stat().st_atime_ns, source.stat().st_mtime_ns + 10_000_000_000))
+    with pytest.raises(BuildError, match="broken"):
+        run_build(spec, settings)
+    assert counter.read_text() == "x\nx\n"  # edited source: the build ran again
+
+
+def test_rebuild_flag_bypasses_failure_cache(tmp_path: Path, make_settings: MakeSettings) -> None:
+    spec, counter = failing_counted_spec(tmp_path)
+    with pytest.raises(BuildError):
+        run_build(spec, make_settings())
+    with pytest.raises(BuildError, match="broken"):
+        run_build(spec, make_settings(rebuild=True))
+    assert counter.read_text() == "x\nx\n"

@@ -107,6 +107,109 @@ def test_unknown_robot_name_fails_with_available(pytester: pytest.Pytester) -> N
     result.stdout.fnmatch_lines(["*no robot named 'ghost'*available:*probe*"])
 
 
+def test_build_failure_is_contained_and_replayed(pytester: pytest.Pytester, tmp_path: Path) -> None:
+    """
+    A broken build fails its tests without touching the world: the next test
+    reuses the still-running world, and later tests requiring the broken
+    controller replay the cached failure instead of re-running the build.
+    """
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    counter = tmp_path / "count.txt"
+    broken = pytester.path / "broken_ctrl"
+    broken.mkdir()
+    (broken / "src.txt").write_text("v1")
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        BROKEN = dict(build=("sh", "-c", "echo x >> {counter}; echo kaput; exit 9"))
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", "broken_ctrl", **BROKEN)
+        def test_broken_first(webots):
+            pass
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", {str(PROBE / "probe.py")!r})
+        def test_world_survives(webots):
+            assert webots.controllers["probe"].alive
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", "broken_ctrl", **BROKEN)
+        def test_broken_again(webots):
+            pass
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, errors=2)
+    result.stdout.fnmatch_lines(["*kaput*", "*cached failure*"])
+    assert "WebotsCrashedError" not in result.stdout.str()
+    assert counter.read_text() == "x\n"  # the failing build ran exactly once
+
+
+def test_launch_failure_reboots_world_for_next_test(pytester: pytest.Pytester, tmp_path: Path) -> None:
+    """
+    A marker controller that dies before connecting errors its own test; the
+    world is shut down (a reset could hang on the unconnected robot) and the
+    next test boots a fresh one.
+    """
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    boots = tmp_path / "boots.txt"
+    (pytester.path / "bad.py").write_text("raise SystemExit(3)\n")
+    pytester.makeconftest(
+        f"""
+        def pytest_webots_world_started(instance):
+            with open({str(boots)!r}, "a") as record:
+                record.write(instance.spec.path.name + "\\n")
+        """
+    )
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", "bad.py")
+        def test_dead_controller(webots):
+            pass
+
+        @pytest.mark.webots_world({str(world)!r})
+        def test_fresh_boot(webots):
+            assert webots.world.alive
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*exited with code 3 before connecting*"])
+    assert boots.read_text() == "second.wbt\nsecond.wbt\n"
+
+
+def test_failed_connect_leaves_world_usable(pytester: pytest.Pytester) -> None:
+    """
+    The downstream ~34s scenario: after a controller fails to connect, the
+    world must still step and reset promptly instead of hanging into a
+    misdiagnosed crash.
+    """
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    (pytester.path / "sleeper.py").write_text("import time\ntime.sleep(60)\n")
+    pytester.makepyfile(
+        f"""
+        import pytest
+        from pytest_webots import WebotsError
+
+        @pytest.mark.webots_world({str(world)!r})
+        def test_survives_failed_connect(webots):
+            with pytest.raises(WebotsError, match="did not connect"):
+                webots.launch_controller("probe", "sleeper.py")
+            webots.step()
+        """
+    )
+    start = time.monotonic()
+    result = pytester.runpytest("-p", "no:cacheprovider", "-o", "webots_startup_timeout=8")
+    result.assert_outcomes(passed=1)
+    assert "WebotsCrashedError" not in result.stdout.str()
+    assert time.monotonic() - start < 60
+
+
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not available")
 def test_build_hook_claims_custom_backend(pytester: pytest.Pytester, tmp_path: Path) -> None:
     world = Path(__file__).parent / "worlds" / "second.wbt"

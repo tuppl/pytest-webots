@@ -112,7 +112,11 @@ class ControllerProcess:
         )
         self._reader = threading.Thread(target=self._read_output, name=f"controller-out-{self.spec.robot}", daemon=True)
         self._reader.start()
-        self._wait_connected(snapshot)
+        try:
+            self._wait_connected(snapshot)
+        except BaseException:
+            self.terminate()
+            raise
 
     def _wait_connected(self, snapshot: int) -> None:
         robot = self.spec.robot

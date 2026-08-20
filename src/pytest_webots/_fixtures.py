@@ -67,7 +67,12 @@ def webots(_webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Ite
     specs = collect_controller_specs(request.node, config.rootpath)
     for extra in config.hook.pytest_webots_controllers(item=request.node, instance=_webots_world):
         specs.extend(extra)
-    session.setup_controllers(specs)
+    try:
+        session.setup_controllers(specs)
+    except BaseException:
+        if session.launch_attempted and scope != "function" and _webots_world.alive:
+            _webots_world.shutdown()
+        raise
 
     yield session
 

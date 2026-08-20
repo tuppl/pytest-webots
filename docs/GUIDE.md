@@ -119,7 +119,9 @@ def test_bot(webots):
     assert webots.controllers["my_bot"].alive
 ```
 
-At test setup, the specified controllers will be auto-built then launched. The test will wait until the external controller is connected before the test body runs. Controllers are always scoped per test.
+At test setup, every declared controller is built, with build results cached against the controller's source files. A failed build fails every test declaring that controller (until the source changes, prompting a rebuild). Successfully-built controllers are then launched, each confirmed connected before the test body runs.
+
+Controllers are always scoped per test.
 
 Python controllers run under the pytest interpreter with Webots' `controller` package on `PYTHONPATH`, so it can import your virtual environment. Any other controller starts through Webots' `webots-controller` launcher.
 
@@ -246,6 +248,8 @@ or a CLI command directly:
 @pytest.mark.webots_controller("my_bot", "controllers/my_bot", build=("ninja", "-C", "build"))
 ```
 
+Command builds use the built-in result caching: the build is skipped while the source hash is unchanged. Use `--webots-rebuild` to force a rebuild.
+
 ### With a hook
 
 Pass a string to `build=` to execute more complex builds in a pytest hook:
@@ -266,6 +270,8 @@ def pytest_webots_build_controller(spec, config):
         subprocess.run(["cmake", "--build", str(source / "build")], check=True)
         return True
 ```
+
+Hook builds get no caching: the hook runs on every test declaring the controller. Raise when the build fails, as `check=True` does above, to fail the test.
 
 ## Extending the agent
 

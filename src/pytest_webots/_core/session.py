@@ -49,6 +49,7 @@ class WebotsSession:
         self.ops = AgentOps(instance)
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
+        self.launch_attempted = False
 
     @property
     def world(self) -> WebotsInstance:
@@ -86,7 +87,13 @@ class WebotsSession:
 
     def setup_controllers(self, specs: list[ControllerSpec]) -> None:
         """
-        Validate robot names, then launch autostart specs sequentially in declaration order.
+        Validate every robot name, build every spec, then launch autostart
+        specs sequentially in declaration order.
+
+        A declared controller is a requirement: builds run before any launch so
+        a failure surfaces while nothing is connected. A launch failure
+        terminates the controllers this call already launched, so no orphan
+        stays attached to a world that outlives the test.
         """
         known = set(self._instance.robots)
         unknown = [spec.robot for spec in specs if spec.robot not in known]
@@ -95,11 +102,19 @@ class WebotsSession:
                 f"no robot named {', '.join(repr(r) for r in unknown)} in {self._instance.world_path}; "
                 f"extern robots available: {sorted(known) or 'none'}"
             )
-        for spec in specs:
-            if spec.autostart:
-                self._launch(spec)
-            else:
-                self._pending[spec.robot] = spec
+        if self._builder is not None:
+            for spec in specs:
+                self._builder(spec)
+        try:
+            for spec in specs:
+                if spec.autostart:
+                    self.launch_attempted = True
+                    self._launch(spec, build=False)
+                else:
+                    self._pending[spec.robot] = spec
+        except BaseException:
+            self.terminate_controllers()
+            raise
 
     def launch_controller(
         self,
@@ -136,8 +151,8 @@ class WebotsSession:
                 )
         return self._launch(spec)
 
-    def _launch(self, spec: ControllerSpec) -> ControllerProcess:
-        if self._builder is not None:
+    def _launch(self, spec: ControllerSpec, build: bool = True) -> ControllerProcess:
+        if build and self._builder is not None:
             self._builder(spec)
         process = ControllerProcess(spec, self._instance)
         process.start()

@@ -26,10 +26,16 @@ _LOCK = ".pytest-webots.build-lock"
 _BUILD_TIMEOUT = 300.0
 _EXCLUDED_SUFFIXES = {".o", ".d", ".class", ".jar"}
 
+_failed: dict[Path, tuple[str, str]] = {}  # directory -> (source digest, error message)
+
 
 def run_build(spec: ControllerSpec, settings: Settings) -> bool:
     """
     Build the controller if its backend and cache say so; True when a build ran.
+
+    Failures are cached by source digest: every test requiring the controller
+    errors, but only the first pays for the failing build. Editing any source
+    re-arms it.
 
     Safe under pytest-xdist: a file lock in the controller directory serializes
     workers, and the source hash lets all but the first skip the work.
@@ -46,9 +52,17 @@ def run_build(spec: ControllerSpec, settings: Settings) -> bool:
         digest = _source_digest(directory, spec.path)
         if not settings.rebuild and stamp.exists() and stamp.read_text() == digest and spec.path.exists():
             return False
-        _run(command, directory, settings)
-        if not spec.path.exists():
-            raise BuildError(f"build of {directory} succeeded but expected output {spec.path} is missing")
+        failure = _failed.get(directory)
+        if failure is not None and failure[0] == digest and not settings.rebuild:
+            raise BuildError(f"{failure[1]}\n(cached failure: the source has not changed since this build failed)")
+        try:
+            _run(command, directory, settings)
+            if not spec.path.exists():
+                raise BuildError(f"build of {directory} succeeded but expected output {spec.path} is missing")
+        except BuildError as error:
+            _failed[directory] = (digest, str(error))
+            raise
+        _failed.pop(directory, None)
         stamp.write_text(_source_digest(directory, spec.path))  # rehash
     return True
 
