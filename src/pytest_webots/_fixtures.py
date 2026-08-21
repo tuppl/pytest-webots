@@ -64,7 +64,7 @@ def webots(_webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Ite
 
     session = WebotsSession(_webots_world, builder=builder)
     request.node.stash[SESSION_KEY] = session
-    specs = collect_controller_specs(request.node, config.rootpath)
+    specs = collect_controller_specs(request.node, config.rootpath, request.getfixturevalue)
     for extra in config.hook.pytest_webots_controllers(item=request.node, instance=_webots_world):
         specs.extend(extra)
     try:

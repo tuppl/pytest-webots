@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_webots import ControllerProcess, WebotsError, WebotsSession
+from pytest_webots import ControllerProcess, WebotsError, WebotsSession, fixture_ref
 from pytest_webots._core.build import run_build
 from pytest_webots._core.config import discover_webots_home
 
@@ -49,6 +49,71 @@ def test_tcp_controller(webots: WebotsSession) -> None:
     assert process.alive
     assert process.controller_url().startswith("tcp://127.0.0.1:")
     wait_for_log(process, "probe controller ready")
+
+
+@pytest.fixture
+def probe_path() -> Path:
+    return PROBE
+
+
+@pytest.mark.webots_world(MINIMAL)
+@pytest.mark.webots_controller("probe", fixture_ref("probe_path"))
+def test_fixture_ref_path_launches_controller(webots: WebotsSession) -> None:
+    process = webots.controllers["probe"]
+    assert process.alive
+    wait_for_log(process, "probe controller ready")
+
+
+@pytest.fixture
+def role_flag(role: str) -> str:
+    return f"--role={role}"
+
+
+@pytest.mark.parametrize("role", ["striker", "keeper"])
+@pytest.mark.webots_world(MINIMAL)
+@pytest.mark.webots_controller("probe", "controllers/probe", args=[fixture_ref("role_flag")])
+def test_fixture_ref_follows_parametrize(webots: WebotsSession, role: str) -> None:
+    wait_for_log(webots.controllers["probe"], f"probe args: --role={role}")
+
+
+def test_fixture_ref_on_webots_dependent_fixture_is_diagnosed(pytester: pytest.Pytester) -> None:
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    pytester.makepyfile(
+        f"""
+        import pytest
+        from pytest_webots import fixture_ref
+
+        @pytest.fixture
+        def needs_webots(webots):
+            return "unreachable"
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", fixture_ref("needs_webots"))
+        def test_circular(webots):
+            pass
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*fixture_ref('needs_webots')*circular*launch_controller*"])
+
+
+def test_fixture_ref_to_unknown_fixture_errors_clearly(pytester: pytest.Pytester) -> None:
+    world = Path(__file__).parent / "worlds" / "second.wbt"
+    pytester.makepyfile(
+        f"""
+        import pytest
+        from pytest_webots import fixture_ref
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", fixture_ref("no_such_fixture"))
+        def test_missing(webots):
+            pass
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*fixture_ref('no_such_fixture')*no fixture named 'no_such_fixture'*"])
 
 
 @pytest.mark.webots_world(MINIMAL)

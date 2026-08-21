@@ -94,11 +94,11 @@ The marker has the following parameters:
 | parameter | type | description |
 |---|---|---|
 | `robot` | `str` | The `name` of a `Robot` node in the world, which must set `controller "<extern>"`. |
-| `path` | `str \| Path` | The controller directory in Webots layout — `controllers/my_bot/` runs `my_bot`, `my_bot.exe` or `my_bot.py` inside it. A path to a single file also works for controllers not using the Webots layout. Relative paths resolve against the test file's directory, then the root directory. |
+| `path` | `str \| Path \| FixtureRef` | The controller directory in Webots layout — `controllers/my_bot/` runs `my_bot`, `my_bot.exe` or `my_bot.py` inside it. A path to a single file also works for controllers not using the Webots layout. Relative paths resolve against the test file's directory, then the root directory. |
 | `build` | `str \| Sequence[str] \| False \| None` | Build command which dispatches to `pytest_webots_build_controller`. `False` does not build the controller. Leaving this alone will build the `Makefile` automatically (if one exists). |
-| `args` | `Sequence[str]` | Extra arguments for the controller process. |
-| `env` | `Mapping[str, str]` | Extra environment variables for the controller process. |
-| `cwd` | `str \| Path` | Working directory for the controller process. Defaults to the directory holding it. |
+| `args` | `Sequence[str \| FixtureRef]` | Extra arguments for the controller process. |
+| `env` | `Mapping[str, str \| FixtureRef]` | Extra environment variables for the controller process. |
+| `cwd` | `str \| Path \| FixtureRef` | Working directory for the controller process. Defaults to the directory holding it. |
 | `autostart` | `bool` | `False` declares the controller without launching it, leaving the test to decide when it connects. |
 | `protocol` | `"ipc" \| "tcp"` | External controller protocol. |
 | `ip_address` | `str` | Webots host to reach over TCP. Requires `protocol="tcp"`. |
@@ -125,6 +125,41 @@ Controllers are always scoped per test.
 
 Python controllers run under the pytest interpreter with Webots' `controller` package on `PYTHONPATH`, so it can import your virtual environment. Any other controller starts through Webots' `webots-controller` launcher.
 
+## Controller values from fixtures
+
+A controller marker value can come from a fixture with `fixture_ref` instead of a path string. Pass the fixture's *name* to resolve the value at test setup before any controller builds or launches:
+
+```python
+from pytest_webots import fixture_ref
+
+
+@pytest.fixture
+def controller_path(tmp_path):
+    return build_something(tmp_path)
+
+
+@pytest.mark.webots_world("worlds/arena.wbt")
+@pytest.mark.webots_controller("probe", fixture_ref("controller_path"))
+def test_thing(webots):
+    assert webots.controllers["probe"].alive
+```
+
+The referenced fixture does not need to appear in the test signature, and may be of any scope, from any plugin, and parameterised. Any marker value may be a `fixture_ref`, including nested inside a list, tuple or dict value. Combined with `@pytest.mark.parametrize`, one marker can launch a different controller per parameter:
+
+```python
+@pytest.fixture
+def role_flag(role):
+    return f"--role={role}"
+
+
+@pytest.mark.parametrize("role", ["striker", "keeper"])
+@pytest.mark.webots_world("worlds/arena.wbt")
+@pytest.mark.webots_controller("player", "controllers/player", args=[fixture_ref("role_flag")])
+def test_roles(webots, role): ...
+```
+
+`webots_world` markers cannot take a `fixture_ref` since worlds parameterise the test at collection time, before any fixture exists. Use the `pytest_webots_resolve_world` hook to compute world paths instead.
+
 ## Synchronous vs asynchronous controllers
 
 It is strongly recommended your robots are synchronous so that Webots will wait for each of your controllers to step before advancing the simulation time - this will yield the most predictable robot behaviour.
@@ -148,7 +183,9 @@ Any controller that crashes will not take down its peers or the test. Crashed co
 
 ## Launching a controller mid-test
 
-If some precondition should be setup such that a controller needs to be launched mid-test, the controller marker should be declared with `autostart=False`, then using the `webots` fixture to programmatically launch the controller:
+`webots.launch_controller` is for launches that depend on something happening *during* the test — a precondition staged in the world, a controller started partway through a scenario. If the launch merely depends on a value computed before the test, keep it declarative with `fixture_ref` instead.
+
+Declare the controller marker with `autostart=False`, then use the `webots` fixture to launch it once the precondition is in place:
 
 ```python
 @pytest.mark.webots_world("worlds/arena.wbt")

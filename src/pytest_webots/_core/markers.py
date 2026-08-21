@@ -8,11 +8,11 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+import pytest
 
 if TYPE_CHECKING:
-    import pytest
-
     from .config import Settings
 
 WorldScope = Literal["function", "class", "module", "session"]
@@ -36,6 +36,60 @@ class MarkerError(Exception):
     """
     A webots marker is malformed or names an unresolvable world.
     """
+
+
+@dataclass(frozen=True)
+class FixtureRef:
+    name: str
+
+
+def fixture_ref(name: str) -> FixtureRef:
+    """
+    Defer a webots_controller marker value to a fixture, resolved at webots setup.
+    """
+    return FixtureRef(name)
+
+
+def _ref_failure_detail(name: str, error: Exception) -> str:
+    circular = (
+        f"fixture {name!r} depends on the webots fixture, which is circular; "
+        f"move the logic into the fixture, or use webots.launch_controller in the test"
+    )
+    if isinstance(error, AssertionError) and not str(error):
+        return circular
+    if isinstance(error, pytest.FixtureLookupError):
+        if error.argname == "webots" and error.msg is None:
+            return circular
+        return error.msg or f"no fixture named {error.argname!r}"
+    return f"{type(error).__name__}: {error}".rstrip(": ")
+
+
+def _resolve_refs(value: Any, resolve: Callable[[str], Any], item: pytest.Item) -> Any:
+    if isinstance(value, FixtureRef):
+        try:
+            return resolve(value.name)
+        except Exception as error:
+            raise MarkerError(
+                f"{item.nodeid}: webots_controller could not resolve fixture_ref({value.name!r}): "
+                f"{_ref_failure_detail(value.name, error)}"
+            ) from error
+    if isinstance(value, Mapping):
+        return {key: _resolve_refs(v, resolve, item) for key, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_refs(v, resolve, item) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_resolve_refs(v, resolve, item) for v in value)
+    return value
+
+
+def _contains_ref(value: Any) -> bool:
+    if isinstance(value, FixtureRef):
+        return True
+    if isinstance(value, Mapping):
+        return any(_contains_ref(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_ref(v) for v in value)
+    return False
 
 
 @dataclass(frozen=True)
@@ -111,6 +165,11 @@ def _world_spec(
     unknown = set(mark.kwargs) - _WORLD_KWARGS
     if unknown:
         raise MarkerError(f"{definition.nodeid}: webots_world got unexpected kwargs {sorted(unknown)}")
+    if any(_contains_ref(v) for v in (*mark.args, *mark.kwargs.values())):
+        raise MarkerError(
+            f"{definition.nodeid}: webots_world cannot take a fixture_ref: worlds resolve at collection time, "
+            f"before any fixture exists. Use the pytest_webots_resolve_world hook instead."
+        )
     scope = mark.kwargs.get("scope", "session")
     if scope not in SCOPE_ORDER:
         raise MarkerError(f"{definition.nodeid}: webots_world scope must be one of {SCOPE_ORDER}, got {scope!r}")
@@ -161,7 +220,11 @@ def _resolve_world(
     raise MarkerError(f"{definition.nodeid}: world {name!r} not found; tried:\n  {locations}")
 
 
-def collect_controller_specs(item: pytest.Item, rootpath: Path) -> list[ControllerSpec]:
+def collect_controller_specs(
+    item: pytest.Item,
+    rootpath: Path,
+    resolve_fixture: Callable[[str], Any],
+) -> list[ControllerSpec]:
     """
     Build one ControllerSpec per stacked webots_controller marker on the closest node that has any.
 
@@ -176,7 +239,7 @@ def collect_controller_specs(item: pytest.Item, rootpath: Path) -> list[Controll
     specs: list[ControllerSpec] = []
     seen: set[str] = set()
     for mark in marks:
-        spec = _controller_spec(mark, item, rootpath)
+        spec = _controller_spec(mark, item, rootpath, resolve_fixture)
         if spec.robot in seen:
             raise MarkerError(f"{item.nodeid}: robot {spec.robot!r} has more than one webots_controller marker")
         seen.add(spec.robot)
@@ -184,18 +247,25 @@ def collect_controller_specs(item: pytest.Item, rootpath: Path) -> list[Controll
     return specs
 
 
-def _controller_spec(mark: pytest.Mark, item: pytest.Item, rootpath: Path) -> ControllerSpec:
+def _controller_spec(
+    mark: pytest.Mark,
+    item: pytest.Item,
+    rootpath: Path,
+    resolve_fixture: Callable[[str], Any],
+) -> ControllerSpec:
     if len(mark.args) != 2:
         raise MarkerError(f"{item.nodeid}: webots_controller takes (robot, path) positionally, got {mark.args!r}")
     unknown = set(mark.kwargs) - _CONTROLLER_KWARGS
     if unknown:
         raise MarkerError(f"{item.nodeid}: webots_controller got unexpected kwargs {sorted(unknown)}")
-    robot = str(mark.args[0])
-    build = mark.kwargs.get("build")
-    path = _resolve_controller(str(mark.args[1]), item, rootpath, build=build)
-    cwd = mark.kwargs.get("cwd")
-    protocol = mark.kwargs.get("protocol", "ipc")
-    ip_address = mark.kwargs.get("ip_address")
+    args = _resolve_refs(tuple(mark.args), resolve_fixture, item)
+    kwargs = _resolve_refs(dict(mark.kwargs), resolve_fixture, item)
+    robot = str(args[0])
+    build = kwargs.get("build")
+    path = _resolve_controller(str(args[1]), item, rootpath, build=build)
+    cwd = kwargs.get("cwd")
+    protocol = kwargs.get("protocol", "ipc")
+    ip_address = kwargs.get("ip_address")
     if protocol not in ("ipc", "tcp"):
         raise MarkerError(f"{item.nodeid}: webots_controller protocol must be 'ipc' or 'tcp', got {protocol!r}")
     if ip_address is not None and protocol != "tcp":
@@ -204,10 +274,10 @@ def _controller_spec(mark: pytest.Mark, item: pytest.Item, rootpath: Path) -> Co
         robot=robot,
         path=path,
         build=tuple(build) if isinstance(build, (list, tuple)) else build,
-        args=tuple(str(a) for a in mark.kwargs.get("args") or ()),
-        env={str(k): str(v) for k, v in (mark.kwargs.get("env") or {}).items()},
+        args=tuple(str(a) for a in kwargs.get("args") or ()),
+        env={str(k): str(v) for k, v in (kwargs.get("env") or {}).items()},
         cwd=_resolve_anchored(str(cwd), item, rootpath) if cwd else None,
-        autostart=bool(mark.kwargs.get("autostart", True)),
+        autostart=bool(kwargs.get("autostart", True)),
         protocol=protocol,
         ip_address=str(ip_address) if ip_address is not None else None,
     )
