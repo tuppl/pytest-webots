@@ -51,6 +51,10 @@ class WebotsSession:
         self._pending: dict[str, ControllerSpec] = {}
         self.launch_attempted = False
 
+    def __repr__(self) -> str:
+        controllers = ", ".join(sorted(self.controllers)) or "none"
+        return f"<WebotsSession {self._instance.spec} controllers={controllers}>"
+
     @property
     def world(self) -> WebotsInstance:
         return self._instance

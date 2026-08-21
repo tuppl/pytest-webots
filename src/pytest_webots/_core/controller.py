@@ -40,6 +40,15 @@ class ControllerProcess:
         self._reader: threading.Thread | None = None
         self._output: deque[str] = deque(maxlen=1000)
 
+    def __repr__(self) -> str:
+        if self._proc is None:
+            state = "not started"
+        elif self.alive:
+            state = f"running pid={self._proc.pid}"
+        else:
+            state = f"exited {self.returncode}"
+        return f"<ControllerProcess {self.spec.robot!r} {state}>"
+
     @property
     def robot(self) -> str:
         return self.spec.robot

@@ -68,6 +68,9 @@ class WebotsInstance:
         self._boot_error: BaseException | None = None
         self._announced_port: int | None = None
 
+    def __repr__(self) -> str:
+        return f"<WebotsInstance {self.spec} port={self.port} {'running' if self.alive else 'stopped'}>"
+
     @property
     def world_path(self) -> str:
         return str(self.spec.path)

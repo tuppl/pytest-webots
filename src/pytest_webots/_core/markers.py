@@ -47,6 +47,9 @@ class WorldSpec:
     timeout: float | None = None
     label: str = field(default="", compare=False)
 
+    def __str__(self) -> str:
+        return self.label or self.path.stem
+
 
 @dataclass(frozen=True)
 class ControllerSpec:
@@ -59,6 +62,9 @@ class ControllerSpec:
     autostart: bool = True
     protocol: ControllerProtocol = "ipc"
     ip_address: str | None = None
+
+    def __str__(self) -> str:
+        return self.robot
 
 
 def collect_world_specs(
@@ -245,7 +251,7 @@ def _resolve_anchored(name: str, item: pytest.Item, rootpath: Path) -> Path:
 
 
 def world_ids(specs: Sequence[WorldSpec]) -> list[str]:
-    return [spec.label or spec.path.stem for spec in specs]
+    return [str(spec) for spec in specs]
 
 
 def widest_scope(specs: Sequence[WorldSpec]) -> WorldScope:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pytest_webots import WorldSpec
+from pytest_webots import ControllerSpec, WorldSpec
 from pytest_webots._core.markers import world_ids
 
 
@@ -28,6 +28,26 @@ def test_hook_resolved_names_show_as_written() -> None:
 
 def test_unlabelled_specs_fall_back_to_the_stem() -> None:
     assert world_ids([WorldSpec(path=Path("/p/worlds/arena.wbt"))]) == ["arena"]
+
+
+def test_str_is_the_test_id_not_the_field_dump() -> None:
+    # Anything reporting a spec (a CSV row, a log line) should agree with the
+    # nodeid rather than dumping every field.
+    world = spec("worlds/arena.wbt")
+    assert str(world) == "worlds/arena.wbt"
+    assert f"{world}" == "worlds/arena.wbt"
+    assert str(WorldSpec(path=Path("/p/worlds/arena.wbt"))) == "arena"
+
+
+def test_repr_still_shows_the_fields() -> None:
+    # __str__ is for display; debugging still needs the full dump.
+    assert "scope=" in repr(spec("worlds/arena.wbt"))
+
+
+def test_controller_spec_str_is_the_robot() -> None:
+    controller = ControllerSpec(robot="probe", path=Path("/p/controllers/probe/probe.py"))
+    assert str(controller) == "probe"
+    assert "autostart=" in repr(controller)
 
 
 def test_label_does_not_split_one_world_into_two() -> None:
