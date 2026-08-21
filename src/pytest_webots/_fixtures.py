@@ -76,8 +76,10 @@ def webots(_webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Ite
 
     yield session
 
-    # Reset while controllers are still connected: a dangling synchronous robot
-    # would block the simulation and hang the reset's landing step.
-    if scope != "function" and _webots_world.alive:
-        _webots_world.reset()
-    session.terminate_controllers()
+    try:
+        if scope != "function" and _webots_world.alive:
+            session.recrew_departed()
+            if _webots_world.alive:
+                _webots_world.reset()
+    finally:
+        session.terminate_controllers()

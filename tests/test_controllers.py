@@ -275,6 +275,92 @@ def test_failed_connect_leaves_world_usable(pytester: pytest.Pytester) -> None:
     assert time.monotonic() - start < 60
 
 
+def test_departed_sync_controller_is_recrewed_for_teardown(pytester: pytest.Pytester, tmp_path: Path) -> None:
+    """
+    A synchronization TRUE controller that exits mid-test must not stall the
+    teardown reset: the robot is re-crewed with a stub, teardown stays fast,
+    and the next test reuses the world instead of paying a reboot.
+    """
+    world = Path(__file__).parent / "worlds" / "sync.wbt"
+    boots = tmp_path / "boots.txt"
+    pytester.makeconftest(
+        f"""
+        def pytest_webots_world_started(instance):
+            with open({str(boots)!r}, "a") as record:
+                record.write(instance.spec.path.name + "\\n")
+        """
+    )
+    (pytester.path / "departer.py").write_text(
+        "from controller import Robot\n\nrobot = Robot()\nfor _ in range(3):\n    robot.step(32)\n"
+    )
+    pytester.makepyfile(
+        f"""
+        import time
+
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", "departer.py")
+        def test_controller_departs(webots):
+            process = webots.controllers["probe"]
+            deadline = time.monotonic() + 10
+            while process.alive and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not process.alive
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", {str(PROBE / "probe.py")!r})
+        def test_world_reused(webots):
+            assert webots.controllers["probe"].alive
+        """
+    )
+    start = time.monotonic()
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    elapsed = time.monotonic() - start
+    result.assert_outcomes(passed=2)
+    assert "WebotsCrashedError" not in result.stdout.str()
+    assert elapsed < 20  # the departed-robot stall alone was 30s
+    assert boots.read_text() == "sync.wbt\n"  # reused, not rebooted
+
+
+def test_simulation_quit_controller_does_not_stall_teardown(pytester: pytest.Pytester) -> None:
+    world = Path(__file__).parent / "worlds" / "sync.wbt"
+    (pytester.path / "quitter.py").write_text(
+        "from controller import Supervisor\n\n"
+        "robot = Supervisor()\n"
+        "robot.step(32)\n"
+        "robot.simulationQuit(0)\n"
+        "robot.step(32)\n"
+    )
+    pytester.makepyfile(
+        f"""
+        import time
+
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", "quitter.py")
+        def test_controller_quits(webots):
+            process = webots.controllers["probe"]
+            deadline = time.monotonic() + 10
+            while process.alive and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not process.alive
+
+        @pytest.mark.webots_world({str(world)!r})
+        @pytest.mark.webots_controller("probe", {str(PROBE / "probe.py")!r})
+        def test_next_test_recovers(webots):
+            assert webots.controllers["probe"].alive
+        """
+    )
+    start = time.monotonic()
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    elapsed = time.monotonic() - start
+    result.assert_outcomes(passed=2)
+    assert elapsed < 20
+    assert "did not become ready" not in result.stdout.str()
+
+
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not available")
 def test_build_hook_claims_custom_backend(pytester: pytest.Pytester, tmp_path: Path) -> None:
     world = Path(__file__).parent / "worlds" / "second.wbt"

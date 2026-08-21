@@ -256,14 +256,6 @@ class WebotsInstance:
         with self._lock:
             return self._connect_gen.get(name, 0)
 
-    def connection_active(self, name: str, after: int) -> bool:
-        """
-        True only for a connection established by a connect event newer than
-        ``after`` — a stale pre-relaunch state can never satisfy this.
-        """
-        with self._lock:
-            return self._connect_gen.get(name, 0) > after and name in self.connected
-
     def _read_output(self) -> None:
         proc = self._proc
         assert proc is not None and proc.stdout is not None

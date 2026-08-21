@@ -1,0 +1,15 @@
+#VRML_SIM R2025a utf8
+WorldInfo {
+  basicTimeStep 32
+}
+Viewpoint {
+}
+DEF BALL Solid {
+  translation 0 0 1
+}
+Robot {
+  name "probe"
+  controller "<extern>"
+  supervisor TRUE
+  synchronization TRUE
+}

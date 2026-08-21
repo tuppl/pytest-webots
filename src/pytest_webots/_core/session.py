@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     from .supervisor.proxy import SupervisorProxy
     from .world import WebotsInstance
 
+# Lives beside agent.py: a directory with no module shadowing Webots' ``controller``.
+_STUB_CONTROLLER = Path(__file__).parent / "supervisor" / "stub.py"
+
 
 class AgentOps:
     """
@@ -162,6 +165,32 @@ class WebotsSession:
         process.start()
         self.controllers[spec.robot] = process
         return process
+
+    def recrew_departed(self) -> list[ControllerProcess]:
+        """
+        Attach a stub controller to every robot whose controller this test
+        launched and has since exited. Webots keeps a departed synchronous
+        robot's slot open and blocks stepping until someone reconnects, so the
+        teardown reset needs every such robot re-crewed.
+
+        Stubs replace the dead entries in ``self.controllers``, so
+        ``terminate_controllers`` reaps them.
+        """
+        if not self._instance.alive:
+            return []
+        stubs = []
+        for robot, process in list(self.controllers.items()):
+            if process.alive:
+                continue
+            try:
+                stubs.append(self._launch(ControllerSpec(robot=robot, path=_STUB_CONTROLLER), build=False))
+            except WebotsError:
+                if self._instance.alive:
+                    raise
+                # Webots exited under the launch (e.g. a controller called
+                # simulationQuit); nothing left to re-crew for.
+                break
+        return stubs
 
     def terminate_controllers(self) -> None:
         for process in self.controllers.values():

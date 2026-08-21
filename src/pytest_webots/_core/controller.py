@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .world import WebotsInstance
 
 _TERMINATE_GRACE = 5.0
+_EXIT_LOG_GRACE = 1.0
 
 
 class ControllerProcess:
@@ -131,13 +132,18 @@ class ControllerProcess:
         robot = self.spec.robot
         timeout = self._instance.settings.startup_timeout
         deadline = time.monotonic() + timeout
+        died_at: float | None = None
         while time.monotonic() < deadline:
-            if self._instance.connection_active(robot, after=snapshot):
+            if self._instance.connection_generation(robot) > snapshot:
                 return
             if not self.alive:
-                raise WebotsError(
-                    f"controller for robot {robot!r} exited with code {self.returncode} before connecting:\n{self.logs}"
-                )
+                if died_at is None:
+                    died_at = time.monotonic()
+                elif time.monotonic() - died_at > _EXIT_LOG_GRACE:
+                    raise WebotsError(
+                        f"controller for robot {robot!r} exited with code {self.returncode} "
+                        f"before connecting:\n{self.logs}"
+                    )
             if not self._instance.alive:
                 raise WebotsError(
                     f"Webots exited while the controller for {robot!r} was connecting:\n{self._instance.output()}"

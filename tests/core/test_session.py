@@ -10,6 +10,7 @@ from pytest_webots._core.session import WebotsSession
 
 class StubInstance:
     world_path = "worlds/stub.wbt"
+    alive = True
 
     def __init__(self, robots: list[str]) -> None:
         self.robots = {name: f"ipc://1234/{name}" for name in robots}
@@ -21,6 +22,7 @@ class FakeProcess:
 
     def __init__(self, spec: ControllerSpec, instance: Any) -> None:
         self.spec = spec
+        self.alive = True
 
     def start(self) -> None:
         FakeProcess.events.append(f"launch:{self.spec.robot}")
@@ -74,6 +76,40 @@ def test_build_failure_launches_nothing(events: list[str]) -> None:
         session.setup_controllers([spec("a"), spec("badbuild")])
     assert not any(event.startswith("launch:") for event in events)
     assert not session.launch_attempted
+
+
+def test_recrew_replaces_only_departed_controllers(events: list[str]) -> None:
+    session = make_session(events, ["dead", "live"])
+    session.setup_controllers([spec("dead"), spec("live")])
+    live = session.controllers["live"]
+    session.controllers["dead"].alive = False
+    stubs = session.recrew_departed()
+    assert [stub.spec.robot for stub in stubs] == ["dead"]
+    assert stubs[0].spec.path.name == "stub.py"
+    assert events.count("launch:dead") == 2
+    assert events.count("launch:live") == 1
+    assert session.controllers["live"] is live
+    # The stub needs no build.
+    assert events.count("build:dead") == 1
+
+
+def test_recrew_with_dead_instance_launches_nothing(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.setup_controllers([spec("a")])
+    session.controllers["a"].alive = False
+    session.world.alive = False  # type: ignore[misc]
+    assert session.recrew_departed() == []
+    assert events.count("launch:a") == 1
+
+
+def test_recrew_stubs_are_reaped_by_terminate(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.setup_controllers([spec("a")])
+    session.controllers["a"].alive = False
+    stubs = session.recrew_departed()
+    assert session.controllers["a"] is stubs[0]
+    session.terminate_controllers()
+    assert events.count("terminate:a") == 1
 
 
 def test_pending_spec_launches_without_rebuilding(events: list[str]) -> None:

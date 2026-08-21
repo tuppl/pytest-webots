@@ -1,14 +1,27 @@
+import time
 from pathlib import Path
 
 import pytest
 
-from pytest_webots import WebotsCrashedError, WebotsSession
+from pytest_webots import ControllerProcess, WebotsCrashedError, WebotsSession
 from pytest_webots._core.config import discover_webots_home
 
 pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no Webots installation found")
 
 MINIMAL = "worlds/minimal.wbt"
+SYNC = "worlds/sync.wbt"
+PACER = Path(__file__).parent / "controllers" / "pacer" / "pacer.py"
 INITIAL_BALL = [0.0, 0.0, 1.0]
+MOVED_BALL = [0.5, -0.5, 2.0]
+
+
+def wait_for_log(process: ControllerProcess, needle: str, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if needle in process.logs:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"{needle!r} not found in controller logs:\n{process.logs}")
 
 
 @pytest.mark.webots_world(MINIMAL)
@@ -45,6 +58,24 @@ def test_move_node(webots: WebotsSession) -> None:
 def test_reset_between_tests_restored_node(webots: WebotsSession) -> None:
     field = webots.supervisor.getFromDef("BALL").getField("translation")
     assert field.getSFVec3f() == pytest.approx(INITIAL_BALL)
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+def test_reset_has_landed_when_it_returns(webots: WebotsSession, tmp_path: Path) -> None:
+    hold = tmp_path / "hold"
+    pacer = webots.launch_controller("probe", PACER, args=(str(hold),))
+
+    field = webots.supervisor.getFromDef("BALL").getField("translation")
+    field.setSFVec3f(MOVED_BALL)
+    webots.step(32)
+    assert field.getSFVec3f() == pytest.approx(MOVED_BALL)
+
+    hold.touch()
+    wait_for_log(pacer, "pacer holding")  # the robot stops stepping: the clock stands still
+
+    webots.reset()
+    observed = webots.supervisor.getFromDef("BALL").getField("translation").getSFVec3f()
+    assert observed == pytest.approx(INITIAL_BALL)
 
 
 @pytest.mark.webots_world(MINIMAL)

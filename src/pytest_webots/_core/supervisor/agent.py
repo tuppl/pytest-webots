@@ -42,7 +42,6 @@ def _op_step(agent: Agent, request: dict[str, Any]) -> Any:
 
 
 def _op_reset(agent: Agent, request: dict[str, Any]) -> Any:
-    # simulationReset applies at the end of a step; step to land it, then kill inertia.
     agent.supervisor.simulationReset()
     agent.supervisor.step(agent.basic_time_step)
     agent.supervisor.simulationResetPhysics()
