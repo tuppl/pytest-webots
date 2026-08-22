@@ -11,7 +11,12 @@ from pytest_webots import ControllerProcess, ControllerSpec, WebotsInstance, Wor
 from pytest_webots._core import ports
 from pytest_webots._core import world as world_module
 from pytest_webots._core.config import Settings, discover_webots_home, webots_binary
-from pytest_webots._core.errors import PortAllocationError, WorldBootTimeout
+from pytest_webots._core.errors import (
+    PortAllocationError,
+    WebotsCrashedError,
+    WebotsQuitError,
+    WorldBootTimeout,
+)
 
 MakeSettings = Callable[..., Settings]
 WORLDS = Path(__file__).parent.parent / "worlds"
@@ -57,6 +62,20 @@ def fake_webots(
     delay: float = 0.0,
 ) -> None:
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: FakeProc(lines, exit_code, delay))
+
+
+class HungProc(FakeProc):
+    """
+    Stands in for a Webots that stopped answering but has not exited.
+    """
+
+    def __init__(self) -> None:
+        super().__init__([], None, 0.0)
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        if self._exit_code is None:
+            raise subprocess.TimeoutExpired(cmd="webots", timeout=timeout or 0)
+        return self._exit_code
 
 
 def stub_instance(tmp_path: Path, make_settings: MakeSettings, port: int, **overrides: object) -> WebotsInstance:
@@ -314,3 +333,52 @@ def test_boot_timeout(tmp_path: Path, make_settings: MakeSettings) -> None:
     finally:
         instance.shutdown(force=True)
     assert not instance.alive
+
+
+def failed_instance(
+    tmp_path: Path, make_settings: MakeSettings, proc: FakeProc
+) -> tuple[WebotsInstance, list[BaseException]]:
+    instance = stub_instance(tmp_path, make_settings, port=1234)
+    instance._proc = proc  # type: ignore[assignment]
+    crashes: list[BaseException] = []
+    instance.on_crashed = crashes.append
+    return instance, crashes
+
+
+def test_clean_exit_is_a_quit_not_a_crash(tmp_path: Path, make_settings: MakeSettings) -> None:
+    # A controller calling simulationQuit(0) is a normal shutdown; reporting it
+    # as a crash sends the reader hunting a failure that never happened.
+    instance, crashes = failed_instance(tmp_path, make_settings, FakeProc([], 0, 0.0))
+    with pytest.raises(WebotsQuitError, match="was quit"):
+        instance._handle_failure(RuntimeError("socket closed"))
+    assert crashes == []  # the crash hook is for crashes
+
+
+def test_clean_exit_is_not_caught_as_a_crash(tmp_path: Path, make_settings: MakeSettings) -> None:
+    instance, _ = failed_instance(tmp_path, make_settings, FakeProc([], 0, 0.0))
+    with pytest.raises(WebotsQuitError) as excinfo:
+        instance._handle_failure(RuntimeError("socket closed"))
+    assert not isinstance(excinfo.value, WebotsCrashedError)
+
+
+def test_nonzero_exit_is_a_crash_that_names_the_ambiguity(tmp_path: Path, make_settings: MakeSettings) -> None:
+    # simulationQuit(3) and a genuine crash both surface as 3.
+    instance, crashes = failed_instance(tmp_path, make_settings, FakeProc([], 3, 0.0))
+    with pytest.raises(WebotsCrashedError, match=r"exited with code 3.*simulationQuit\(3\)"):
+        instance._handle_failure(RuntimeError("socket closed"))
+    assert len(crashes) == 1
+
+
+def test_still_running_is_a_hang(tmp_path: Path, make_settings: MakeSettings) -> None:
+    instance, crashes = failed_instance(tmp_path, make_settings, HungProc())
+    with pytest.raises(WebotsCrashedError, match="stopped responding"):
+        instance._handle_failure(RuntimeError("timed out"))
+    assert len(crashes) == 1
+
+
+def test_failure_keeps_the_underlying_error_as_the_cause(tmp_path: Path, make_settings: MakeSettings) -> None:
+    instance, _ = failed_instance(tmp_path, make_settings, FakeProc([], 0, 0.0))
+    original = RuntimeError("agent closed the connection during 'step'")
+    with pytest.raises(WebotsQuitError) as excinfo:
+        instance._handle_failure(original)
+    assert excinfo.value.__cause__ is original

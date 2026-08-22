@@ -3,7 +3,7 @@ pytest plugin for running Webots simulations with tests.
 """
 
 from ._core.controller import ControllerProcess
-from ._core.errors import WebotsCrashedError, WebotsError, WorldBootTimeout
+from ._core.errors import WebotsCrashedError, WebotsError, WebotsQuitError, WorldBootTimeout
 from ._core.markers import ControllerSpec, FixtureRef, WorldSpec, fixture_ref
 from ._core.session import WebotsSession
 from ._core.supervisor.proxy import SupervisorProxy
@@ -17,6 +17,7 @@ __all__ = [
     "WebotsCrashedError",
     "WebotsError",
     "WebotsInstance",
+    "WebotsQuitError",
     "WebotsSession",
     "WorldBootTimeout",
     "WorldSpec",

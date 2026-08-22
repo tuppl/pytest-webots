@@ -19,7 +19,17 @@ class WorldBootTimeout(WebotsError):
 
 class WebotsCrashedError(WebotsError):
     """
-    The Webots process died or hung while a test was using it.
+    The Webots process died unexpectedly or hung while a test was using it.
+    """
+
+
+class WebotsQuitError(WebotsError):
+    """
+    The simulation was quit while a test was using it.
+
+    Deliberate, not a failure of Webots: a controller called ``simulationQuit``
+    or the window was closed. Sibling of ``WebotsCrashedError`` rather than a
+    subclass, so catching a crash does not catch a normal shutdown.
     """
 
 

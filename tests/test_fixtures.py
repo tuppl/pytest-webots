@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_webots import ControllerProcess, WebotsCrashedError, WebotsSession
+from pytest_webots import ControllerProcess, WebotsCrashedError, WebotsQuitError, WebotsSession
 from pytest_webots._core.config import discover_webots_home
 
 pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no Webots installation found")
@@ -11,6 +11,7 @@ pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no W
 MINIMAL = "worlds/minimal.wbt"
 SYNC = "worlds/sync.wbt"
 PACER = Path(__file__).parent / "controllers" / "pacer" / "pacer.py"
+QUITTER = Path(__file__).parent / "controllers" / "quitter" / "quitter.py"
 INITIAL_BALL = [0.0, 0.0, 1.0]
 MOVED_BALL = [0.5, -0.5, 2.0]
 
@@ -91,6 +92,27 @@ def test_crash_raises_webots_crashed_error(webots: WebotsSession) -> None:
     webots.world.kill()  # group kill: on Linux, webots is a wrapper whose child must die too
     with pytest.raises(WebotsCrashedError):
         webots.step()
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+@pytest.mark.webots_controller("probe", str(QUITTER))
+def test_deliberate_quit_is_not_reported_as_a_crash(webots: WebotsSession) -> None:
+    # A controller ending the simulation is a normal shutdown, so the test is
+    # told the simulation was quit rather than sent hunting a crash.
+    wait_for_log(webots.controllers["probe"], "simulationQuit(0)")
+    with pytest.raises(WebotsQuitError, match="was quit") as excinfo:
+        for _ in range(50):
+            webots.step()
+    assert not isinstance(excinfo.value, WebotsCrashedError)
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+@pytest.mark.webots_controller("probe", str(QUITTER), args=["7"])
+def test_nonzero_quit_stays_a_crash_and_names_both_causes(webots: WebotsSession) -> None:
+    wait_for_log(webots.controllers["probe"], "simulationQuit(7)")
+    with pytest.raises(WebotsCrashedError, match=r"exited with code 7.*simulationQuit\(7\)"):
+        for _ in range(50):
+            webots.step()
 
 
 @pytest.mark.webots_world(MINIMAL)

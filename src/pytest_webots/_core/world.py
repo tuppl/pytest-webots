@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import ports
 from .config import python_controller_path
-from .errors import PortAllocationError, WebotsCrashedError, WebotsError, WorldBootTimeout
+from .errors import PortAllocationError, WebotsCrashedError, WebotsError, WebotsQuitError, WorldBootTimeout
 from .inject import inject_supervisor, remove_injected
 from .supervisor.proxy import AgentClient, AgentConnectionError, SupervisorProxy, decode_result, encode_args
 
@@ -32,6 +32,7 @@ _PORT_RANGE_RE = re.compile(r"failed to open TCP server in the port range \[(\d+
 _CONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: connected\.")
 _DISCONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: disconnected")
 _TERMINATE_GRACE = 5.0
+_EXIT_GRACE = 5.0  # long enough for a quitting Webots to finish exiting
 _AGENT_SCRIPT = Path(__file__).parent / "supervisor" / "agent.py"
 
 
@@ -333,16 +334,46 @@ class WebotsInstance:
         return decode_result(result, self._proxy_call)
 
     def _handle_failure(self, error: BaseException) -> None:
-        """
-        An agent RPC failed: Webots died, or it hung. Either way this instance
-        is done; reap everything and surface a crash.
-        """
-        crash = WebotsCrashedError(f"Webots crashed or hung while running {self.world_path}:\n{self.output()}")
-        crash.__cause__ = error
-        if self.on_crashed is not None:
-            self.on_crashed(crash)
+        returncode = self._exit_code(_EXIT_GRACE)
+        if self._reader is not None:
+            self._reader.join(timeout=1.0)  # let the lines explaining the exit land
+        clean = returncode == 0
+        failure: WebotsError
+        if clean:
+            failure = WebotsQuitError(
+                f"the simulation running {self.world_path} was quit "
+                f"(a controller called simulationQuit, or the window was closed)"
+            )
+        elif returncode is None:
+            failure = WebotsCrashedError(f"Webots stopped responding while running {self.world_path}:\n{self.output()}")
+        else:
+            # simulationQuit(N) and a genuine crash both surface as N, and
+            # nothing in the output separates them; name both possibilities.
+            failure = WebotsCrashedError(
+                f"Webots exited with code {returncode} while running {self.world_path} "
+                f"(crashed, or a controller called simulationQuit({returncode})):\n{self.output()}"
+            )
+        failure.__cause__ = error
+        if not clean and self.on_crashed is not None:
+            self.on_crashed(failure)
         self.shutdown(force=True)
-        raise crash
+        raise failure
+
+    def _exit_code(self, grace: float) -> int | None:
+        """
+        The process's exit code, or None while it is still running.
+
+        The agent socket closes before the process finishes exiting, so polling
+        the instant an RPC fails would report a clean quit as still running.
+        Waiting out the grace period is what separates "quit" from "hung".
+        """
+        proc = self._proc
+        if proc is None:
+            return None
+        try:
+            return proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            return None
 
     def kill(self) -> None:
         """

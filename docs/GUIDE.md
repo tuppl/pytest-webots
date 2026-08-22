@@ -45,6 +45,8 @@ def test_fresh(webots):
 
 `arena.wbt` will be booted once. `test_move` will run its test then the world is reset. `test_fresh` will run its test but since it's the last test requiring the world, `arena.wbt` will shutdown.
 
+If the simulation was quit, a `WebotsQuitError` will be raised.
+
 ## The `webots` fixture
 
 A `webots` fixture is provided that allows you to control the world from pytest. It has the following properties:
