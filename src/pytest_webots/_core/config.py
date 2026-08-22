@@ -88,6 +88,10 @@ def _discover_agent_plugins(config: pytest.Config) -> tuple[Path, ...]:
     return plugins
 
 
+def _override[T](cli: T | None, ini: T) -> T:
+    return ini if cli is None else cli
+
+
 @dataclass(frozen=True)
 class Settings:
     home: Path | None
@@ -135,10 +139,11 @@ class Settings:
             mode=config.getoption("--webots-mode") or config.getini("webots_mode"),
             headless=not config.getoption("--webots-gui") and config.getini("webots_headless"),
             extra_args=tuple(config.getini("webots_args")),
-            startup_timeout=config.getoption("--webots-startup-timeout")
-            or float(config.getini("webots_startup_timeout")),
+            startup_timeout=_override(
+                config.getoption("--webots-startup-timeout"), float(config.getini("webots_startup_timeout"))
+            ),
             max_restarts=int(config.getini("webots_max_restarts")),
-            port_base=config.getoption("--webots-port-base") or int(config.getini("webots_port_base")),
+            port_base=_override(config.getoption("--webots-port-base"), int(config.getini("webots_port_base"))),
             supervisor_name=config.getini("webots_supervisor_name"),
             inject_supervisor=not config.getoption("--webots-no-inject") and config.getini("webots_inject_supervisor"),
             build=not config.getoption("--webots-no-build") and config.getini("webots_build"),
