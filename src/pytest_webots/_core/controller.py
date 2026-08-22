@@ -7,21 +7,19 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import threading
 import time
-from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import controller_launcher, python_controller_path
+from .config import controller_launcher
 from .errors import WebotsError
+from .process import OutputReader, controller_env, terminate
 
 if TYPE_CHECKING:
     from .config import Settings
     from .markers import ControllerSpec
     from .world import WebotsInstance
 
-_TERMINATE_GRACE = 5.0
 _EXIT_LOG_GRACE = 1.0
 
 
@@ -38,8 +36,7 @@ class ControllerProcess:
         self.spec = spec
         self._instance = instance
         self._proc: subprocess.Popen[str] | None = None
-        self._reader: threading.Thread | None = None
-        self._output: deque[str] = deque(maxlen=1000)
+        self._reader = OutputReader(f"controller-out-{spec.robot}")
 
     def __repr__(self) -> str:
         if self._proc is None:
@@ -64,7 +61,7 @@ class ControllerProcess:
 
     @property
     def logs(self) -> str:
-        return "\n".join(self._output)
+        return self._reader.text()
 
     def controller_url(self) -> str:
         if self.spec.protocol == "tcp":
@@ -89,21 +86,15 @@ class ControllerProcess:
         return cmd + list(self.spec.args)
 
     def environment(self) -> dict[str, str]:
-        settings = self._instance.settings
-        env = os.environ.copy()
-        env.update(self.spec.env)
-        if self.spec.path.suffix == ".py":
-            home = self._require_home(settings)
-            env["WEBOTS_HOME"] = str(home)
-            env["WEBOTS_CONTROLLER_URL"] = self.controller_url()
-            bundled = str(python_controller_path(home))
-            env["PYTHONPATH"] = bundled + os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else bundled
-        return env
+        if self.spec.path.suffix != ".py":
+            # webots-controller sets the language's own paths up itself.
+            return os.environ | dict(self.spec.env)
+        home = self._require_home(self._instance.settings)
+        return controller_env(home, self.controller_url(), dict(self.spec.env))
 
     def start(self) -> None:
         if self.alive:
             return
-        self._output.clear()
         snapshot = self._instance.connection_generation(self.spec.robot)
         if not self.spec.path.exists():
             raise WebotsError(
@@ -120,8 +111,7 @@ class ControllerProcess:
             text=True,
             bufsize=1,
         )
-        self._reader = threading.Thread(target=self._read_output, name=f"controller-out-{self.spec.robot}", daemon=True)
-        self._reader.start()
+        self._reader.start(self._proc)
         try:
             self._wait_connected(snapshot)
         except BaseException:
@@ -152,30 +142,13 @@ class ControllerProcess:
         raise WebotsError(f"controller for robot {robot!r} did not connect within {timeout:.0f}s:\n{self.logs}")
 
     def terminate(self) -> None:
-        proc = self._proc
-        if proc is None:
-            return
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(_TERMINATE_GRACE)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-        if self._reader is not None:
-            self._reader.join(timeout=2)
-            self._reader = None
+        terminate(self._proc)
+        self._reader.join()
 
     def restart(self) -> None:
         self.terminate()
         self._proc = None
         self.start()
-
-    def _read_output(self) -> None:
-        proc = self._proc
-        assert proc is not None and proc.stdout is not None
-        for line in proc.stdout:
-            self._output.append(line.rstrip("\n"))
 
     @staticmethod
     def _require_home(settings: Settings) -> Path:

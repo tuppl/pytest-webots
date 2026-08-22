@@ -11,16 +11,15 @@ import sys
 import tempfile
 import threading
 import time
-from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import ports
-from .config import python_controller_path
 from .errors import PortAllocationError, WebotsCrashedError, WebotsError, WebotsQuitError, WorldBootTimeout
 from .inject import inject_supervisor, remove_injected
+from .process import EXIT_GRACE, OutputReader, controller_env, exit_code, terminate
 from .supervisor.proxy import AgentClient, AgentConnectionError, SupervisorProxy, decode_result, encode_args
 
 if TYPE_CHECKING:
@@ -31,8 +30,6 @@ _URL_RE = re.compile(r"^(?:ipc|tcp)://(?P<port>\d+)/(?P<robot>.+)$")
 _PORT_RANGE_RE = re.compile(r"failed to open TCP server in the port range \[(\d+)-(\d+)\]")
 _CONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: connected\.")
 _DISCONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: disconnected")
-_TERMINATE_GRACE = 5.0
-_EXIT_GRACE = 5.0  # long enough for a quitting Webots to finish exiting
 _AGENT_SCRIPT = Path(__file__).parent / "supervisor" / "agent.py"
 
 
@@ -56,13 +53,11 @@ class WebotsInstance:
         self.on_before_reset: Callable[[], None] | None = None
         self.on_after_reset: Callable[[], None] | None = None
         self._proc: subprocess.Popen[str] | None = None
-        self._reader: threading.Thread | None = None
-        self._output: deque[str] = deque(maxlen=1000)
+        self._reader = OutputReader(f"webots-out-{port}", on_line=self._parse_line)
         self._lock = threading.Lock()
         self._injected: Path | None = None
         self._agent_proc: subprocess.Popen[str] | None = None
-        self._agent_output: deque[str] = deque(maxlen=200)
-        self._agent_reader: threading.Thread | None = None
+        self._agent_reader = OutputReader(f"agent-out-{port}", maxlen=200)
         self._client: AgentClient | None = None
         self._agent_address: str | None = None
         self._boot_failures = 0
@@ -142,7 +137,6 @@ class WebotsInstance:
             self._announced_port = None
         self.robots.clear()
         self.connected.clear()
-        self._output.clear()
         if self.settings.inject_supervisor:
             token = f"{self.port}-{os.getpid()}"  # pid too: two runs on one port must not share the file
             self._injected = inject_supervisor(self.spec.path, self.settings.supervisor_name, token)
@@ -154,8 +148,7 @@ class WebotsInstance:
             bufsize=1,
             start_new_session=sys.platform != "win32",
         )
-        self._reader = threading.Thread(target=self._read_output, name=f"webots-out-{self.port}", daemon=True)
-        self._reader.start()
+        self._reader.start(self._proc)
         self._wait_ready()
         if self.settings.inject_supervisor:
             self._start_agent()
@@ -228,7 +221,7 @@ class WebotsInstance:
         """
         if announced is None or announced == self.port:
             return
-        self._output.append(
+        self._reader.append(
             f"INFO: pytest-webots: Webots is serving port {announced}, not the requested {self.port}; following it."
         )
         self.port = announced
@@ -238,7 +231,7 @@ class WebotsInstance:
         Compose a boot failure, draining the reader first when the process is
         gone so the line explaining the exit makes it into the message.
         """
-        if not self.alive and self._reader is not None:
+        if not self.alive:
             self._reader.join(timeout=1.0)
         output = self.output()
         if match := _PORT_RANGE_RE.search(output):
@@ -257,27 +250,27 @@ class WebotsInstance:
         with self._lock:
             return self._connect_gen.get(name, 0)
 
-    def _read_output(self) -> None:
-        proc = self._proc
-        assert proc is not None and proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if match := _URL_RE.match(line):
-                with self._lock:
-                    if self._announced_port is None:
-                        self._announced_port = int(match["port"])
-                    self.robots[match["robot"]] = line
-                continue
-            if match := _CONNECTED_RE.match(line):
-                with self._lock:
-                    name = match.group(1)
-                    self.connected.add(name)
-                    self._connect_gen[name] = self._connect_gen.get(name, 0) + 1
-            elif match := _DISCONNECTED_RE.match(line):
-                with self._lock:
-                    self.connected.discard(match.group(1))
-            if line:
-                self._output.append(line)
+    def _parse_line(self, line: str) -> bool:
+        """
+        Track discovery and connection state from Webots' one stdout stream.
+
+        Returns False for URL announcements, which are data rather than log.
+        """
+        if match := _URL_RE.match(line):
+            with self._lock:
+                if self._announced_port is None:
+                    self._announced_port = int(match["port"])
+                self.robots[match["robot"]] = line
+            return False
+        if match := _CONNECTED_RE.match(line):
+            with self._lock:
+                name = match.group(1)
+                self.connected.add(name)
+                self._connect_gen[name] = self._connect_gen.get(name, 0) + 1
+        elif match := _DISCONNECTED_RE.match(line):
+            with self._lock:
+                self.connected.discard(match.group(1))
+        return True
 
     def _start_agent(self) -> None:
         if sys.platform == "win32":
@@ -287,12 +280,7 @@ class WebotsInstance:
             Path(self._agent_address).unlink(missing_ok=True)
         home = self.settings.home
         assert home is not None
-        env = os.environ.copy()
-        env["WEBOTS_HOME"] = str(home)
-        env["WEBOTS_CONTROLLER_URL"] = f"ipc://{self.port}/{self.settings.supervisor_name}"
-        bundled = str(python_controller_path(home))
-        env["PYTHONPATH"] = bundled + os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else bundled
-        self._agent_output.clear()
+        env = controller_env(home, f"ipc://{self.port}/{self.settings.supervisor_name}")
         self._agent_proc = subprocess.Popen(
             [sys.executable, str(_AGENT_SCRIPT), self._agent_address] + [str(p) for p in self.settings.agent_plugins],
             stdout=subprocess.PIPE,
@@ -301,10 +289,7 @@ class WebotsInstance:
             bufsize=1,
             env=env,
         )
-        self._agent_reader = threading.Thread(
-            target=self._read_agent_output, name=f"agent-out-{self.port}", daemon=True
-        )
-        self._agent_reader.start()
+        self._agent_reader.start(self._agent_proc)
 
         def abort() -> str | None:
             proc = self._agent_proc
@@ -334,9 +319,8 @@ class WebotsInstance:
         return decode_result(result, self._proxy_call)
 
     def _handle_failure(self, error: BaseException) -> None:
-        returncode = self._exit_code(_EXIT_GRACE)
-        if self._reader is not None:
-            self._reader.join(timeout=1.0)  # let the lines explaining the exit land
+        returncode = exit_code(self._proc, EXIT_GRACE)
+        self._reader.join(timeout=1.0)  # let the lines explaining the exit land
         clean = returncode == 0
         failure: WebotsError
         if clean:
@@ -358,22 +342,6 @@ class WebotsInstance:
             self.on_crashed(failure)
         self.shutdown(force=True)
         raise failure
-
-    def _exit_code(self, grace: float) -> int | None:
-        """
-        The process's exit code, or None while it is still running.
-
-        The agent socket closes before the process finishes exiting, so polling
-        the instant an RPC fails would report a clean quit as still running.
-        Waiting out the grace period is what separates "quit" from "hung".
-        """
-        proc = self._proc
-        if proc is None:
-            return None
-        try:
-            return proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            return None
 
     def kill(self) -> None:
         """
@@ -397,51 +365,29 @@ class WebotsInstance:
         if self.settings.keep_alive and not force:
             return
         self._teardown_agent()
-        proc = self._proc
-        if proc is not None:
-            if proc.poll() is None:
-                if self.on_stopping is not None:
-                    self.on_stopping()
-                proc.terminate()
-                try:
-                    proc.wait(_TERMINATE_GRACE)
-                except subprocess.TimeoutExpired:
-                    self.kill()
-                    proc.wait()
-            if self._reader is not None:
-                self._reader.join(timeout=2)
-                self._reader = None
+        if self._proc is not None:
+            if self._proc.poll() is None and self.on_stopping is not None:
+                self.on_stopping()
+            terminate(self._proc, kill=self.kill)  # group kill: the Linux binary is a wrapper
+            self._reader.join()
             self._proc = None
         remove_injected(self._injected)
         self._injected = None
 
-    def _read_agent_output(self) -> None:
-        proc = self._agent_proc
-        assert proc is not None and proc.stdout is not None
-        for line in proc.stdout:
-            self._agent_output.append(line.rstrip("\n"))
-
     def agent_output(self) -> str:
-        return "\n".join(self._agent_output)
+        return self._agent_reader.text()
 
     def _teardown_agent(self) -> None:
         if self._client is not None:
             self._client.close()
             self._client = None
         if self._agent_proc is not None:
-            self._agent_proc.terminate()
-            try:
-                self._agent_proc.wait(_TERMINATE_GRACE)
-            except subprocess.TimeoutExpired:
-                self._agent_proc.kill()
-                self._agent_proc.wait()
+            terminate(self._agent_proc)
             self._agent_proc = None
-        if self._agent_reader is not None:
-            self._agent_reader.join(timeout=2)
-            self._agent_reader = None
+        self._agent_reader.join()
         if self._agent_address is not None and not self._agent_address.startswith("tcp:"):
             Path(self._agent_address).unlink(missing_ok=True)
         self._agent_address = None
 
     def output(self) -> str:
-        return "\n".join(self._output)
+        return self._reader.text()
