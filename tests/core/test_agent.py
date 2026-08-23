@@ -70,7 +70,7 @@ def test_dict_argument_resolves_nested_proxies(agent: Agent) -> None:
 
 
 def test_unknown_op_lists_available(agent: Agent) -> None:
-    with pytest.raises(ValueError, match="unknown op: warp.*available.*ping"):
+    with pytest.raises(ValueError, match=r"unknown op: warp.*available.*ping"):
         agent.dispatch({"op": "warp"})
 
 
