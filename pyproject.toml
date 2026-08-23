@@ -1,19 +1,50 @@
 [project]
 name = "pytest-webots"
-version = "0.1.1"
-description = "pytest plugin for running Webots simulation with tests"
+version = "0.2.0"
+description = "pytest plugin for running Webots simulations with tests"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Dan Nguyen", email = "dan@tuppl.dev" }]
-keywords = ["pytest", "robot", "simulation", "webots"]
+keywords = [
+  "controller",
+  "integration-testing",
+  "pytest",
+  "robot",
+  "robotics",
+  "ros",
+  "simulation",
+  "supervisor",
+  "testing",
+  "webots",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: Pytest",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Education",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
 dependencies = [
   "filelock>=3.13",
-  "pytest>=9.1.1",
+  "pytest>=8.3",
 ]
 
 [project.urls]
+Changelog = "https://github.com/tuppl/pytest-webots/releases"
+Documentation = "https://github.com/tuppl/pytest-webots/blob/main/docs/GUIDE.md"
 Homepage = "https://github.com/tuppl/pytest-webots"
 Issues = "https://github.com/tuppl/pytest-webots/issues"
 Repository = "https://github.com/tuppl/pytest-webots"
@@ -34,9 +65,42 @@ build-backend = "uv_build"
 
 [tool.mypy]
 files = ["src/pytest_webots"]
+strict = true
 
 [tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config"
 testpaths = ["tests"]
+xfail_strict = true
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+select = [
+  "A",  # builtin shadowing
+  "ASYNC",
+  "B",  # bugbear
+  "BLE",  # blind except
+  "C4",  # comprehensions
+  "DTZ",  # naive datetimes
+  "E",
+  "EXE",
+  "F",
+  "I",  # import sorting
+  "ICN",
+  "INT",
+  "ISC",
+  "PIE",
+  "PTH",  # pathlib over os.path
+  "RET",
+  "RUF",
+  "SIM",
+  "SLOT",
+  "T20",  # stray print/pprint
+  "UP",  # pyupgrade
+  "W",
+  "YTT",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/controllers/*" = ["T20"]
