@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING
 
 import pytest
@@ -13,10 +14,49 @@ from ._core.session import WebotsSession
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from ._core.config import Settings
     from ._core.markers import ControllerSpec
     from ._core.world import WebotsInstance
 
 SESSION_KEY: pytest.StashKey[WebotsSession] = pytest.StashKey()
+
+# Scopes narrower than the parametrize scope pytest finalizes on; session has
+# no entry because pytest already owns that boundary.
+_NARROWER_SCOPES = {"function": pytest.Function, "class": pytest.Class, "module": pytest.Module}
+
+
+def _register_world_finalizer(request: pytest.FixtureRequest, instance: WebotsInstance) -> None:
+    """
+    Shut a world down at its own boundary when its scope is the narrower one.
+    """
+    node_type = _NARROWER_SCOPES.get(instance.spec.scope)
+    node = request.node.getparent(node_type) if node_type else None
+    if node is not None:
+        node.addfinalizer(instance.shutdown)
+
+
+def _build(spec: ControllerSpec, config: pytest.Config, settings: Settings) -> None:
+    if config.hook.pytest_webots_build_controller(spec=spec, config=config):
+        return
+    run_build(spec, settings)
+
+
+def _leave_world_clean(session: WebotsSession, instance: WebotsInstance) -> None:
+    """
+    Leave the world fit for the next test, whether this one finished or failed
+    in setup: re-crew any robot whose controller departed so the reset's landing
+    step is not blocked, reset, then drop this test's controllers.
+
+    A function-scoped world is about to be shut down, so there is nothing to
+    preserve.
+    """
+    try:
+        if instance.spec.scope != "function" and instance.alive:
+            session.recrew_departed()
+            if instance.alive:
+                instance.reset()
+    finally:
+        session.terminate_controllers()
 
 
 @pytest.fixture(scope="session")
@@ -43,26 +83,14 @@ def _webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
 
 @pytest.fixture
 def webots(_webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Iterator[WebotsSession]:
-    scope = _webots_world.spec.scope
-    if scope == "function":
-        request.addfinalizer(_webots_world.shutdown)
-    elif scope in ("class", "module"):
-        # Narrower than the parametrize scope.
-        node_type = pytest.Class if scope == "class" else pytest.Module
-        node = request.node.getparent(node_type)
-        if node is not None:
-            node.addfinalizer(_webots_world.shutdown)
+    _register_world_finalizer(request, _webots_world)
     _webots_world.ensure_running()
 
     config = request.config
-    settings = config.stash[SETTINGS_KEY]
-
-    def builder(spec: ControllerSpec) -> None:
-        if config.hook.pytest_webots_build_controller(spec=spec, config=config):
-            return
-        run_build(spec, settings)
-
-    session = WebotsSession(_webots_world, builder=builder)
+    session = WebotsSession(
+        _webots_world,
+        builder=partial(_build, config=config, settings=config.stash[SETTINGS_KEY]),
+    )
     request.node.stash[SESSION_KEY] = session
     specs = collect_controller_specs(request.node, config.rootpath, request.getfixturevalue)
     for extra in config.hook.pytest_webots_controllers(item=request.node, instance=_webots_world):
@@ -70,16 +98,9 @@ def webots(_webots_world: WebotsInstance, request: pytest.FixtureRequest) -> Ite
     try:
         session.setup_controllers(specs)
     except BaseException:
-        if session.launch_attempted and scope != "function" and _webots_world.alive:
-            _webots_world.shutdown()
+        _leave_world_clean(session, _webots_world)
         raise
 
     yield session
 
-    try:
-        if scope != "function" and _webots_world.alive:
-            session.recrew_departed()
-            if _webots_world.alive:
-                _webots_world.reset()
-    finally:
-        session.terminate_controllers()
+    _leave_world_clean(session, _webots_world)

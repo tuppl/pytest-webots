@@ -212,11 +212,11 @@ def test_build_failure_is_contained_and_replayed(pytester: pytest.Pytester, tmp_
     assert counter.read_text() == "x\n"  # the failing build ran exactly once
 
 
-def test_launch_failure_reboots_world_for_next_test(pytester: pytest.Pytester, tmp_path: Path) -> None:
+def test_launch_failure_leaves_the_world_reusable(pytester: pytest.Pytester, tmp_path: Path) -> None:
     """
-    A marker controller that dies before connecting errors its own test; the
-    world is shut down (a reset could hang on the unconnected robot) and the
-    next test boots a fresh one.
+    A marker controller that dies before connecting errors its own test, but the
+    world survives: the failed launch is re-crewed and reset like any teardown,
+    so the next test reuses the instance instead of paying for a boot.
     """
     world = Path(__file__).parent / "worlds" / "second.wbt"
     boots = tmp_path / "boots.txt"
@@ -238,14 +238,14 @@ def test_launch_failure_reboots_world_for_next_test(pytester: pytest.Pytester, t
             pass
 
         @pytest.mark.webots_world({str(world)!r})
-        def test_fresh_boot(webots):
+        def test_reuses_the_world(webots):
             assert webots.world.alive
         """
     )
     result = pytester.runpytest("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*exited with code 3 before connecting*"])
-    assert boots.read_text() == "second.wbt\nsecond.wbt\n"
+    assert boots.read_text() == "second.wbt\n"  # one boot: the failure did not cost the world
 
 
 def test_failed_connect_leaves_world_usable(pytester: pytest.Pytester) -> None:

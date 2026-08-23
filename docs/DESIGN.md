@@ -127,8 +127,10 @@ flowchart TD
     G --> H["launch autostart specs in order,<br/>each confirmed connected<br/>before the next starts"]
     H --> I(["test body"])
 
-    G -.->|"build fails"| X["error the test<br/><i>nothing launched, world untouched</i>"]
-    H -.->|"launch fails"| Y["terminate what launched,<br/>shut the world down"]
+    G -.->|"build fails"| X["error the test"]
+    H -.->|"launch fails"| X
+
+    X -.-> Y(["stage 7 · leave the world clean"])
 
     style X stroke-dasharray: 4 4
     style Y stroke-dasharray: 4 4
@@ -136,13 +138,16 @@ flowchart TD
 
 Builds run before any launch so a failure surfaces while nothing is connected. Build results are cached against a source digest — **including failures**, so a broken controller fails every test declaring it while only the first pays for the build.
 
+Neither failure has its own recovery: both fall into the same teardown as a test that finished normally, which is what lets a failed setup keep the world rather than spend a reboot on it.
+
 ### Stage 7 — teardown
 
-The ordering here is load-bearing and non-obvious.
+One path, entered from a finished test body and from a failed setup alike. The ordering is load-bearing and non-obvious.
 
 ```mermaid
 flowchart TD
-    A(["test body done"]) --> B{"scope is function<br/>or world already dead?"}
+    A(["test body done"]) --> B
+    A2(["setup failed"]) --> B{"scope is function<br/>or world already dead?"}
     B -->|yes| T
     B -->|no| C["recrew_departed:<br/>attach a stub to every robot whose<br/>controller launched and has since exited"]
     C --> D{"world still alive?"}
@@ -152,10 +157,11 @@ flowchart TD
     T --> F(["next test reuses this world"])
 ```
 
-Two constraints shape it:
+Three constraints shape it:
 
 - **The reset happens while controllers are connected.** Webots blocks stepping on a `synchronization TRUE` robot with nobody attached, and the reset's landing step is a step like any other. Terminating first would hang it.
 - **A departed controller is re-crewed, not tolerated.** Webots keeps a departed robot's slot open and waits for a new connection, so a controller that legitimately finishes its work — a game reaching game over — would otherwise stall the reset until the agent socket times out. A stub reconnects in about 60 ms; without it the teardown costs 30 seconds and a misdiagnosed crash. Stubs are used rather than restarting the real controller so no user code re-runs.
+- **A failed setup takes this path too, rather than a recovery of its own.** A launch that fails leaves controllers terminated but still on the session, which is exactly the shape re-crewing handles, so the world is reset and kept instead of shut down. A build that fails launched nothing, so re-crewing finds nothing and the reset is a formality.
 
 Termination sits in a `finally` so a failed reset cannot strand the test's controllers.
 

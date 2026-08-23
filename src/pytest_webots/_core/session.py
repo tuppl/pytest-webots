@@ -52,7 +52,6 @@ class WebotsSession:
         self.ops = AgentOps(instance)
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
-        self.launch_attempted = False
 
     def __repr__(self) -> str:
         controllers = ", ".join(sorted(self.controllers)) or "none"
@@ -115,7 +114,6 @@ class WebotsSession:
         try:
             for spec in specs:
                 if spec.autostart:
-                    self.launch_attempted = True
                     self._launch(spec, build=False)
                 else:
                     self._pending[spec.robot] = spec

@@ -66,7 +66,6 @@ def test_launch_failure_terminates_already_launched(events: list[str]) -> None:
     with pytest.raises(WebotsError, match="c failed to connect"):
         session.setup_controllers([spec("a"), spec("c")])
     assert "terminate:a" in events
-    assert session.launch_attempted
 
 
 def test_build_failure_launches_nothing(events: list[str]) -> None:
@@ -75,7 +74,6 @@ def test_build_failure_launches_nothing(events: list[str]) -> None:
     with pytest.raises(WebotsError, match="badbuild build failed"):
         session.setup_controllers([spec("a"), spec("badbuild")])
     assert not any(event.startswith("launch:") for event in events)
-    assert not session.launch_attempted
 
 
 def test_recrew_replaces_only_departed_controllers(events: list[str]) -> None:
