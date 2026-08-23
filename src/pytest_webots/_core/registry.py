@@ -16,6 +16,7 @@ from .world import WebotsInstance
 if TYPE_CHECKING:
     from .config import Settings
     from .markers import WorldSpec
+    from .world import WorldHooks
 
 
 def _worker_offset(worker_id: str | None) -> int:
@@ -30,19 +31,24 @@ class WorldRegistry:
     Tracks live Webots instances and hands out ports; not a lifetime manager.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, hooks: WorldHooks | None = None) -> None:
         self._settings = settings
+        self._hooks = hooks
         self._instances: dict[WorldSpec, WebotsInstance] = {}
         self._ports = PortAllocator(settings.port_base + _worker_offset(settings.worker_id))
 
-    def get_or_create(self, spec: WorldSpec) -> tuple[WebotsInstance, bool]:
+    def get_or_create(self, spec: WorldSpec) -> WebotsInstance:
         instance = self._instances.get(spec)
-        if instance is not None:
-            return instance, False
-        instance = WebotsInstance(spec, self._settings, port=self._ports.acquire())
-        instance.reallocate_port = self._ports.acquire
-        self._instances[spec] = instance
-        return instance, True
+        if instance is None:
+            instance = WebotsInstance(
+                spec,
+                self._settings,
+                port=self._ports.acquire(),
+                hooks=self._hooks,
+                allocate_port=self._ports.acquire,
+            )
+            self._instances[spec] = instance
+        return instance
 
     def sweep(self) -> None:
         """

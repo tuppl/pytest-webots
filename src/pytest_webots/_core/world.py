@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from . import ports
 from .errors import PortAllocationError, WebotsCrashedError, WebotsError, WebotsQuitError, WorldBootTimeout
@@ -33,25 +33,69 @@ _DISCONNECTED_RE = re.compile(r"^INFO: '(.+)' extern controller: disconnected")
 _AGENT_SCRIPT = Path(__file__).parent / "supervisor" / "agent.py"
 
 
+class WorldHooks(Protocol):
+    """
+    Notifications a world raises as it runs.
+
+    The instance passes itself, so an implementation needs no reference back and
+    can be handed to the constructor. `_fixtures` implements this over pytest's
+    hook relay; `_core` stays free of pytest.
+    """
+
+    def world_args(self, world: Path) -> tuple[str, ...]: ...
+
+    def started(self, instance: WebotsInstance) -> None: ...
+
+    def stopping(self, instance: WebotsInstance) -> None: ...
+
+    def crashed(self, instance: WebotsInstance, error: BaseException) -> None: ...
+
+    def before_reset(self, instance: WebotsInstance) -> None: ...
+
+    def after_reset(self, instance: WebotsInstance) -> None: ...
+
+
+class NoHooks:
+    """
+    The default: a world constructed without an observer still runs.
+    """
+
+    def world_args(self, world: Path) -> tuple[str, ...]:
+        return ()
+
+    def started(self, instance: WebotsInstance) -> None: ...
+
+    def stopping(self, instance: WebotsInstance) -> None: ...
+
+    def crashed(self, instance: WebotsInstance, error: BaseException) -> None: ...
+
+    def before_reset(self, instance: WebotsInstance) -> None: ...
+
+    def after_reset(self, instance: WebotsInstance) -> None: ...
+
+
 class WebotsInstance:
     """
     A running (or restartable) Webots process for one world.
     """
 
-    def __init__(self, spec: WorldSpec, settings: Settings, port: int) -> None:
+    def __init__(
+        self,
+        spec: WorldSpec,
+        settings: Settings,
+        port: int,
+        *,
+        hooks: WorldHooks | None = None,
+        allocate_port: Callable[[], int] | None = None,
+    ) -> None:
         self.spec = spec
         self.settings = settings
         self.port = port
+        self._hooks = hooks or NoHooks()
+        self._allocate_port = allocate_port
         self.robots: dict[str, str] = {}
         self.connected: set[str] = set()
         self._connect_gen: dict[str, int] = {}  # monotonic per robot, never reset
-        self.hook_args: tuple[str, ...] = ()  # from pytest_webots_world_args, set by the adapter
-        self.reallocate_port: Callable[[], int] | None = None  # set by the registry
-        self.on_started: Callable[[], None] | None = None
-        self.on_stopping: Callable[[], None] | None = None
-        self.on_crashed: Callable[[BaseException], None] | None = None
-        self.on_before_reset: Callable[[], None] | None = None
-        self.on_after_reset: Callable[[], None] | None = None
         self._proc: subprocess.Popen[str] | None = None
         self._reader = OutputReader(f"webots-out-{port}", on_line=self._parse_line)
         self._lock = threading.Lock()
@@ -99,7 +143,7 @@ class WebotsInstance:
             cmd += ["--no-rendering", "--minimize"]
         cmd += self.settings.extra_args
         cmd += self.spec.args
-        cmd += self.hook_args
+        cmd += self._hooks.world_args(self.spec.path)
         cmd.append(str(self._injected if self._injected is not None else self.spec.path))
         return cmd
 
@@ -123,14 +167,13 @@ class WebotsInstance:
             raise
         self._boot_failures = 0
         self._boot_error = None
-        if self.on_started is not None:
-            self.on_started()
+        self._hooks.started(self)
 
     def _reallocate_port(self) -> None:
-        if self.reallocate_port is None:
+        if self._allocate_port is None:
             return
         with suppress(Exception):
-            self.port = self.reallocate_port()
+            self.port = self._allocate_port()
 
     def _boot(self) -> None:
         with self._lock:
@@ -161,11 +204,9 @@ class WebotsInstance:
         return int(self._request({"op": "step", "ms": ms}))
 
     def reset(self) -> None:
-        if self.on_before_reset is not None:
-            self.on_before_reset()
+        self._hooks.before_reset(self)
         self._request({"op": "reset"})
-        if self.on_after_reset is not None:
-            self.on_after_reset()
+        self._hooks.after_reset(self)
 
     def reload(self) -> None:
         """
@@ -338,8 +379,8 @@ class WebotsInstance:
                 f"(crashed, or a controller called simulationQuit({returncode})):\n{self.output()}"
             )
         failure.__cause__ = error
-        if not clean and self.on_crashed is not None:
-            self.on_crashed(failure)
+        if not clean:
+            self._hooks.crashed(self, failure)
         self.shutdown(force=True)
         raise failure
 
@@ -366,8 +407,8 @@ class WebotsInstance:
             return
         self._teardown_agent()
         if self._proc is not None:
-            if self._proc.poll() is None and self.on_stopping is not None:
-                self.on_stopping()
+            if self._proc.poll() is None:
+                self._hooks.stopping(self)
             terminate(self._proc, kill=self.kill)  # group kill: the Linux binary is a wrapper
             self._reader.join()
             self._proc = None

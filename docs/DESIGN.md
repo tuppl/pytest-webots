@@ -48,7 +48,9 @@ flowchart TB
 
 Pipeline modules import `_core` only, with one exception: `_report` imports the `SESSION_KEY` stash key from `_fixtures`, because that is where the session is stashed onto the item.
 
-Where domain code must fire this plugin's own hooks — `world_started`, `world_stopping`, `world_crashed`, `before/after_reset` all originate inside `WebotsInstance` — the fixtures inject callbacks whose implementations call `config.hook`. That keeps `_core` free of any pytest coupling beyond types.
+Where domain code must fire this plugin's own hooks — `world_started`, `world_stopping`, `world_crashed`, `before/after_reset` and `world_args` all originate inside `WebotsInstance` — `_core` declares a `WorldHooks` **Protocol** and takes an implementation at construction. `_configure` supplies the one that relays to `config.hook`; the `NoHooks` default means an instance built without an observer still runs, so no call site needs a null guard. That keeps `_core` free of any pytest coupling beyond types, and a world is fully wired the moment it exists rather than after two other modules finish assigning to it.
+
+The notification passes the instance rather than closing over it, which is what lets the implementation be constructed before any world is.
 
 `supervisor/agent.py` and `supervisor/stub.py` run **inside Webots** as extern controllers. They import only the standard library and the Webots-bundled `controller` package, never `pytest_webots` itself.
 

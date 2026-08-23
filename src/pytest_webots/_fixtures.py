@@ -64,18 +64,7 @@ def _webots_world(request: pytest.FixtureRequest) -> Iterator[WebotsInstance]:
     spec = getattr(request, "param", None)
     if spec is None:
         pytest.skip("test requires a @pytest.mark.webots_world marker")
-    config = request.config
-    instance, fresh = config.stash[REGISTRY_KEY].get_or_create(spec)
-    if fresh:
-        hook = config.hook
-        instance.hook_args = tuple(
-            arg for args in hook.pytest_webots_world_args(world=spec.path, config=config) for arg in args
-        )
-        instance.on_started = lambda: hook.pytest_webots_world_started(instance=instance)
-        instance.on_stopping = lambda: hook.pytest_webots_world_stopping(instance=instance)
-        instance.on_crashed = lambda error: hook.pytest_webots_world_crashed(instance=instance, error=error)
-        instance.on_before_reset = lambda: hook.pytest_webots_before_reset(instance=instance)
-        instance.on_after_reset = lambda: hook.pytest_webots_after_reset(instance=instance)
+    instance = request.config.stash[REGISTRY_KEY].get_or_create(spec)
     instance.ensure_running()
     yield instance
     instance.shutdown()

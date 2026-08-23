@@ -17,6 +17,7 @@ from pytest_webots._core.errors import (
     WebotsQuitError,
     WorldBootTimeout,
 )
+from pytest_webots._core.world import WorldHooks
 
 MakeSettings = Callable[..., Settings]
 WORLDS = Path(__file__).parent.parent / "worlds"
@@ -78,7 +79,14 @@ class HungProc(FakeProc):
         return self._exit_code
 
 
-def stub_instance(tmp_path: Path, make_settings: MakeSettings, port: int, **overrides: object) -> WebotsInstance:
+def stub_instance(
+    tmp_path: Path,
+    make_settings: MakeSettings,
+    port: int,
+    allocate_port: Callable[[], int] | None = None,
+    hooks: WorldHooks | None = None,
+    **overrides: object,
+) -> WebotsInstance:
     home = webots_binary(tmp_path / "webots")
     home.parent.mkdir(parents=True, exist_ok=True)
     home.touch()
@@ -89,7 +97,13 @@ def stub_instance(tmp_path: Path, make_settings: MakeSettings, port: int, **over
         "startup_timeout": 5.0,
     }
     defaults.update(overrides)
-    return WebotsInstance(WorldSpec(path=tmp_path / "world.wbt", timeout=5), make_settings(**defaults), port=port)
+    return WebotsInstance(
+        WorldSpec(path=tmp_path / "world.wbt", timeout=5),
+        make_settings(**defaults),
+        port=port,
+        allocate_port=allocate_port,
+        hooks=hooks,
+    )
 
 
 def live_instance(
@@ -98,13 +112,14 @@ def live_instance(
     port: int,
     world: str = "minimal.wbt",
     timeout: float = 120.0,
+    allocate_port: Callable[[], int] | None = None,
     **overrides: object,
 ) -> WebotsInstance:
     # Boot from a copy so the Webots GUI-state sidecar lands in tmp_path, not the repo.
     path = tmp_path / world
     path.write_text((WORLDS / world).read_text())
     settings = make_settings(home=discover_webots_home(None), startup_timeout=timeout, **overrides)
-    return WebotsInstance(WorldSpec(path=path, timeout=timeout), settings, port=port)
+    return WebotsInstance(WorldSpec(path=path, timeout=timeout), settings, port=port, allocate_port=allocate_port)
 
 
 def hold(count: int, start: int = 40000) -> list[socket.socket]:
@@ -216,8 +231,7 @@ def test_port_exhaustion_moves_to_a_new_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, make_settings: MakeSettings
 ) -> None:
     fake_webots(monkeypatch, ["failed to open TCP server in the port range [1234-1244]"], exit_code=1)
-    instance = stub_instance(tmp_path, make_settings, port=1234)
-    instance.reallocate_port = ports.PortAllocator(1300).acquire
+    instance = stub_instance(tmp_path, make_settings, port=1234, allocate_port=ports.PortAllocator(1300).acquire)
     try:
         with pytest.raises(PortAllocationError):
             instance.boot()
@@ -235,8 +249,9 @@ def test_boot_leaves_a_busy_port_behind(
     with sock:
         taken = sock.getsockname()[1]
         fake_webots(monkeypatch, [f"ipc://{taken + 1}/probe"])
-        instance = stub_instance(tmp_path, make_settings, port=taken)
-        instance.reallocate_port = ports.PortAllocator(taken + 1).acquire
+        instance = stub_instance(
+            tmp_path, make_settings, port=taken, allocate_port=ports.PortAllocator(taken + 1).acquire
+        )
         try:
             instance.boot()
             assert instance.port != taken
@@ -298,8 +313,12 @@ def test_boot_reports_the_range_when_webots_finds_no_port(tmp_path: Path, make_s
 
 @requires_webots
 def test_reboot_moves_off_a_port_taken_while_down(tmp_path: Path, make_settings: MakeSettings) -> None:
-    instance = live_instance(tmp_path, make_settings, port=ports.PortAllocator(41000).acquire())
-    instance.reallocate_port = ports.PortAllocator(42000).acquire
+    instance = live_instance(
+        tmp_path,
+        make_settings,
+        port=ports.PortAllocator(41000).acquire(),
+        allocate_port=ports.PortAllocator(42000).acquire,
+    )
     blocked: list[socket.socket] = []
     try:
         instance.boot()
@@ -335,14 +354,42 @@ def test_boot_timeout(tmp_path: Path, make_settings: MakeSettings) -> None:
     assert not instance.alive
 
 
+class RecordingHooks:
+    """
+    A WorldHooks implementation that remembers what it was told.
+    """
+
+    def __init__(self, extra_args: tuple[str, ...] = ()) -> None:
+        self.extra_args = extra_args
+        self.crashes: list[BaseException] = []
+        self.events: list[str] = []
+
+    def world_args(self, world: Path) -> tuple[str, ...]:
+        return self.extra_args
+
+    def started(self, instance: WebotsInstance) -> None:
+        self.events.append("started")
+
+    def stopping(self, instance: WebotsInstance) -> None:
+        self.events.append("stopping")
+
+    def crashed(self, instance: WebotsInstance, error: BaseException) -> None:
+        self.crashes.append(error)
+
+    def before_reset(self, instance: WebotsInstance) -> None:
+        self.events.append("before_reset")
+
+    def after_reset(self, instance: WebotsInstance) -> None:
+        self.events.append("after_reset")
+
+
 def failed_instance(
     tmp_path: Path, make_settings: MakeSettings, proc: FakeProc
 ) -> tuple[WebotsInstance, list[BaseException]]:
-    instance = stub_instance(tmp_path, make_settings, port=1234)
+    hooks = RecordingHooks()
+    instance = stub_instance(tmp_path, make_settings, port=1234, hooks=hooks)
     instance._proc = proc  # type: ignore[assignment]
-    crashes: list[BaseException] = []
-    instance.on_crashed = crashes.append
-    return instance, crashes
+    return instance, hooks.crashes
 
 
 def test_clean_exit_is_a_quit_not_a_crash(tmp_path: Path, make_settings: MakeSettings) -> None:
@@ -382,3 +429,33 @@ def test_failure_keeps_the_underlying_error_as_the_cause(tmp_path: Path, make_se
     with pytest.raises(WebotsQuitError) as excinfo:
         instance._handle_failure(original)
     assert excinfo.value.__cause__ is original
+
+
+def test_world_args_hook_reaches_the_command(tmp_path: Path, make_settings: MakeSettings) -> None:
+    hooks = RecordingHooks(extra_args=("--heartbeat=5000",))
+    instance = stub_instance(tmp_path, make_settings, port=1234, hooks=hooks)
+    assert "--heartbeat=5000" in instance.command()
+
+
+def test_a_world_without_hooks_still_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, make_settings: MakeSettings
+) -> None:
+    # The NoHooks default is what lets callers construct an instance directly.
+    fake_webots(monkeypatch, ["ipc://1234/probe"])
+    instance = stub_instance(tmp_path, make_settings, port=1234)
+    try:
+        instance.boot()  # would raise if any notification needed a null guard
+        assert instance.alive
+    finally:
+        instance.shutdown(force=True)
+
+
+def test_lifecycle_notifications_reach_the_hooks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, make_settings: MakeSettings
+) -> None:
+    hooks = RecordingHooks()
+    fake_webots(monkeypatch, ["ipc://1234/probe"])
+    instance = stub_instance(tmp_path, make_settings, port=1234, hooks=hooks)
+    instance.boot()
+    instance.shutdown(force=True)
+    assert hooks.events == ["started", "stopping"]
