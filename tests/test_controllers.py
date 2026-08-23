@@ -1,13 +1,16 @@
 import dataclasses
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from pytest_webots import ControllerProcess, WebotsError, WebotsSession, fixture_ref
+from pytest_webots import WebotsError, WebotsSession, fixture_ref
 from pytest_webots._core.build import run_build
 from pytest_webots._core.config import discover_webots_home
+
+WaitForLog = Callable[..., None]
 
 pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no Webots installation found")
 
@@ -15,18 +18,9 @@ MINIMAL = "worlds/minimal.wbt"
 PROBE = Path(__file__).parent / "controllers" / "probe"
 
 
-def wait_for_log(process: ControllerProcess, needle: str, timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if needle in process.logs:
-            return
-        time.sleep(0.05)
-    raise AssertionError(f"{needle!r} not found in controller logs:\n{process.logs}")
-
-
 @pytest.mark.webots_world(MINIMAL)
 @pytest.mark.webots_controller("probe", "controllers/probe")
-def test_marker_launches_controller(webots: WebotsSession) -> None:
+def test_marker_launches_controller(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
     process = webots.controllers["probe"]
     assert process.alive
     wait_for_log(process, "probe controller ready")
@@ -34,7 +28,7 @@ def test_marker_launches_controller(webots: WebotsSession) -> None:
 
 @pytest.mark.webots_world(MINIMAL)
 @pytest.mark.webots_controller("probe", "controllers/probe", args=["--role=striker"])
-def test_controller_args_and_restart(webots: WebotsSession) -> None:
+def test_controller_args_and_restart(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
     process = webots.controllers["probe"]
     wait_for_log(process, "probe args: --role=striker")
     process.restart()
@@ -44,7 +38,7 @@ def test_controller_args_and_restart(webots: WebotsSession) -> None:
 
 @pytest.mark.webots_world(MINIMAL)
 @pytest.mark.webots_controller("probe", "controllers/probe", protocol="tcp")
-def test_tcp_controller(webots: WebotsSession) -> None:
+def test_tcp_controller(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
     process = webots.controllers["probe"]
     assert process.alive
     assert process.controller_url().startswith("tcp://127.0.0.1:")
@@ -58,7 +52,7 @@ def probe_path() -> Path:
 
 @pytest.mark.webots_world(MINIMAL)
 @pytest.mark.webots_controller("probe", fixture_ref("probe_path"))
-def test_fixture_ref_path_launches_controller(webots: WebotsSession) -> None:
+def test_fixture_ref_path_launches_controller(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
     process = webots.controllers["probe"]
     assert process.alive
     wait_for_log(process, "probe controller ready")
@@ -72,7 +66,7 @@ def role_flag(role: str) -> str:
 @pytest.mark.parametrize("role", ["striker", "keeper"])
 @pytest.mark.webots_world(MINIMAL)
 @pytest.mark.webots_controller("probe", "controllers/probe", args=[fixture_ref("role_flag")])
-def test_fixture_ref_follows_parametrize(webots: WebotsSession, role: str) -> None:
+def test_fixture_ref_follows_parametrize(webots: WebotsSession, role: str, wait_for_log: WaitForLog) -> None:
     wait_for_log(webots.controllers["probe"], f"probe args: --role={role}")
 
 
@@ -117,7 +111,7 @@ def test_fixture_ref_to_unknown_fixture_errors_clearly(pytester: pytest.Pytester
 
 
 @pytest.mark.webots_world(MINIMAL)
-def test_imperative_launch(webots: WebotsSession) -> None:
+def test_imperative_launch(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
     process = webots.launch_controller("probe", PROBE / "probe.py")
     assert process.alive
     assert webots.controllers["probe"] is process
@@ -146,7 +140,7 @@ def test_crashing_controller_fails_fast_with_logs(webots: WebotsSession, tmp_pat
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not available")
 @pytest.mark.webots_world(MINIMAL)
 @pytest.mark.webots_controller("probe", "controllers/cprobe")
-def test_c_controller_builds_and_runs(webots: WebotsSession) -> None:
+def test_c_controller_builds_and_runs(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
     process = webots.controllers["probe"]
     assert process.alive
     wait_for_log(process, "cprobe controller ready")

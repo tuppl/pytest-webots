@@ -1,14 +1,34 @@
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from pytest_webots import WebotsInstance
+from pytest_webots import ControllerProcess, WebotsInstance
 from pytest_webots._core.config import Settings
 
 pytest_plugins = ["pytester"]
 
 BOOTS: list[str] = []
+
+WaitForLog = Callable[..., None]
+
+
+@pytest.fixture
+def wait_for_log() -> WaitForLog:
+    """
+    Block until a controller prints `needle`, or fail saying what it did print.
+    """
+
+    def wait(process: ControllerProcess, needle: str, timeout: float = 10.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if needle in process.logs:
+                return
+            time.sleep(0.02)
+        raise AssertionError(f"{needle!r} not found in controller logs:\n{process.logs}")
+
+    return wait
 
 
 def pytest_webots_world_started(instance: WebotsInstance) -> None:
