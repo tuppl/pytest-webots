@@ -1,5 +1,9 @@
 # pytest-webots
 
+[![PyPI](https://img.shields.io/pypi/v/pytest-webots)](https://pypi.org/project/pytest-webots/)
+[![Python](https://img.shields.io/pypi/pyversions/pytest-webots)](https://pypi.org/project/pytest-webots/)
+[![Tests](https://github.com/tuppl/pytest-webots/actions/workflows/ci.yml/badge.svg)](https://github.com/tuppl/pytest-webots/actions/workflows/ci.yml)
+
 pytest plugin for running [Webots](https://cyberbotics.com) simulations with tests. Declare the worlds and controllers a test needs with markers. The plugin handles process lifecycle, world reuse, fast state reset, controller builds, and crash recovery.
 
 The full guide lives in [docs/GUIDE.md](docs/GUIDE.md); the internals are described in [docs/DESIGN.md](docs/DESIGN.md).
