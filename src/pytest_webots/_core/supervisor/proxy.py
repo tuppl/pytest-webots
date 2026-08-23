@@ -8,6 +8,7 @@ import json
 import socket
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from ..errors import WebotsError
@@ -86,10 +87,8 @@ class AgentClient:
     def close(self) -> None:
         for closable in (self._stream, self._sock):
             if closable is not None:
-                try:
+                with suppress(OSError):
                     closable.close()
-                except OSError:
-                    pass
         self._stream = None
         self._sock = None
 

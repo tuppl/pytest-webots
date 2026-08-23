@@ -394,10 +394,8 @@ class WebotsInstance:
         if sys.platform == "win32":
             proc.kill()
         else:
-            try:
+            with suppress(ProcessLookupError):
                 os.killpg(proc.pid, 9)
-            except ProcessLookupError:
-                pass
 
     def shutdown(self, force: bool = False) -> None:
         """
