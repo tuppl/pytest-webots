@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_webots import WebotsError, WebotsSession, fixture_ref
+from pytest_webots import WebotsCrashedError, WebotsError, WebotsSession, fixture_ref
 from pytest_webots._core.build import run_build
 from pytest_webots._core.config import discover_webots_home
 
@@ -16,6 +16,9 @@ pytestmark = pytest.mark.skipif(discover_webots_home(None) is None, reason="no W
 
 MINIMAL = "worlds/minimal.wbt"
 PROBE = Path(__file__).parent / "controllers" / "probe"
+SYNC = "worlds/sync.wbt"
+FINISHER = Path(__file__).parent / "controllers" / "finisher" / "finisher.py"
+CRASHER = Path(__file__).parent / "controllers" / "crasher" / "crasher.py"
 
 
 @pytest.mark.webots_world(MINIMAL)
@@ -393,3 +396,58 @@ def test_build_hook_claims_custom_backend(pytester: pytest.Pytester, tmp_path: P
     result = pytester.runpytest("-p", "no:cacheprovider")
     result.assert_outcomes(passed=1)
     assert witness.exists()
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+@pytest.mark.webots_controller("probe", str(FINISHER))
+def test_world_keeps_stepping_after_a_controller_finishes(webots: WebotsSession) -> None:
+    """
+    A controller returning from main is the end of its run, not a fault.
+
+    Webots holds the empty seat and blocks every robot's step until someone
+    takes it, so without reseating the next call waits out the agent timeout
+    and is reported as a crash.
+    """
+    process = webots.controllers["probe"]
+    deadline = time.monotonic() + 20
+    while process.alive and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert process.returncode == 0
+
+    start = time.monotonic()
+    webots.step()
+    assert time.monotonic() - start < 5  # the reported symptom was a 30s timeout
+    assert webots.supervisor.getFromDef("BALL").getPosition() == pytest.approx([0.0, 0.0, 1.0])
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+@pytest.mark.webots_controller("probe", str(CRASHER))
+def test_a_crashed_controller_is_not_reseated(webots: WebotsSession) -> None:
+    # Reseating a non-zero exit would trade a loud hang for a quiet wrong answer.
+    process = webots.controllers["probe"]
+    deadline = time.monotonic() + 20
+    while process.alive and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert process.returncode == 3
+    with pytest.raises(WebotsCrashedError):
+        webots.step()
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+@pytest.mark.webots_controller("probe", str(FINISHER))
+def test_a_new_controller_can_take_over_a_reseated_robot(webots: WebotsSession, wait_for_log: WaitForLog) -> None:
+    """
+    Reseating must not lock the robot: a test may still attach a real
+    controller where the finished one left off, evicting the stub.
+    """
+    finished = webots.controllers["probe"]
+    deadline = time.monotonic() + 20
+    while finished.alive and time.monotonic() < deadline:
+        time.sleep(0.05)
+    webots.step()  # reseats, so a stub now holds the seat
+    assert webots.controllers["probe"].spec.path.name == "stub.py"
+
+    replacement = webots.launch_controller("probe", PROBE / "probe.py")
+    wait_for_log(replacement, "probe controller ready")
+    assert replacement.alive
+    webots.step()

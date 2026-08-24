@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Any
 from .controller import ControllerProcess
 from .errors import WebotsError
 from .markers import ControllerProtocol, ControllerSpec
+from .supervisor.proxy import SupervisorProxy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from .supervisor.proxy import SupervisorProxy
     from .world import WebotsInstance
 
 # Lives beside agent.py: a directory with no module shadowing Webots' ``controller``.
@@ -67,13 +67,22 @@ class WebotsSession:
 
     @property
     def supervisor(self) -> SupervisorProxy:
-        return self._instance.supervisor
+        return SupervisorProxy(self._guarded_proxy_call)
+
+    def _guarded_proxy_call(self, target: int | None, method: str, args: list[Any]) -> Any:
+        self._reseat_before_blocking()
+        return self._instance.proxy_call(target, method, args)
+
+    def _reseat_before_blocking(self) -> None:
+        if self._departed():
+            self.recrew_departed(clean_only=True)
 
     @property
     def logs(self) -> str:
         return self._instance.output()
 
     def step(self, ms: int | None = None) -> int:
+        self._reseat_before_blocking()
         return self._instance.step(ms)
 
     def reset(self) -> None:
@@ -83,24 +92,17 @@ class WebotsSession:
         self._instance.reload()
 
     def sim_time(self) -> float:
+        self._reseat_before_blocking()
         return self._instance.sim_time()
 
     def agent_op(self, op: str, **params: Any) -> Any:
         """
         Invoke a supervisor-agent op, e.g. one registered by a webots_agent_plugins file.
         """
+        self._reseat_before_blocking()
         return self._instance.agent_op(op, params)
 
     def setup_controllers(self, specs: list[ControllerSpec]) -> None:
-        """
-        Validate every robot name, build every spec, then launch autostart
-        specs sequentially in declaration order.
-
-        A declared controller is a requirement: builds run before any launch so
-        a failure surfaces while nothing is connected. A launch failure
-        terminates the controllers this call already launched, so no orphan
-        stays attached to a world that outlives the test.
-        """
         known = set(self._instance.robots)
         unknown = [spec.robot for spec in specs if spec.robot not in known]
         if unknown:
@@ -132,9 +134,6 @@ class WebotsSession:
         protocol: ControllerProtocol = "ipc",
         ip_address: str | None = None,
     ) -> ControllerProcess:
-        """
-        Launch a controller mid-test; with no path, start a declared autostart=False spec.
-        """
         if path is None:
             spec = self._pending.pop(robot, None)
             if spec is None:
@@ -159,26 +158,29 @@ class WebotsSession:
     def _launch(self, spec: ControllerSpec, build: bool = True) -> ControllerProcess:
         if build and self._builder is not None:
             self._builder(spec)
+        incumbent = self.controllers.get(spec.robot)
+        if incumbent is not None and incumbent.alive:
+            incumbent.terminate()
         process = ControllerProcess(spec, self._instance)
         process.start()
         self.controllers[spec.robot] = process
         return process
 
-    def recrew_departed(self) -> list[ControllerProcess]:
-        """
-        Attach a stub controller to every robot whose controller this test
-        launched and has since exited. Webots keeps a departed synchronous
-        robot's slot open and blocks stepping until someone reconnects, so the
-        teardown reset needs every such robot re-crewed.
+    def _departed(self) -> list[str]:
+        connected = self._instance.connected
+        return sorted(
+            robot for robot, process in self.controllers.items() if robot not in connected or not process.alive
+        )
 
-        Stubs replace the dead entries in ``self.controllers``, so
-        ``terminate_controllers`` reaps them.
-        """
+    def recrew_departed(self, clean_only: bool = False) -> list[ControllerProcess]:
         if not self._instance.alive:
             return []
         stubs = []
-        for robot, process in list(self.controllers.items()):
+        for robot in self._departed():
+            process = self.controllers[robot]
             if process.alive:
+                continue  # disconnected but still running; it may reconnect itself
+            if clean_only and process.returncode != 0:
                 continue
             try:
                 stubs.append(self._launch(ControllerSpec(robot=robot, path=_STUB_CONTROLLER), build=False))

@@ -127,7 +127,7 @@ class WebotsInstance:
 
     @property
     def supervisor(self) -> SupervisorProxy:
-        return SupervisorProxy(self._proxy_call)
+        return SupervisorProxy(self.proxy_call)
 
     def command(self) -> list[str]:
         cmd = [
@@ -230,7 +230,7 @@ class WebotsInstance:
         payload: dict[str, Any] = {"op": op}
         for key, value in params.items():
             payload[key] = encode_args([value])[0]
-        return decode_result(self._request(payload), self._proxy_call)
+        return decode_result(self._request(payload), self.proxy_call)
 
     def _wait_ready(self) -> None:
         """
@@ -355,9 +355,9 @@ class WebotsInstance:
             self._handle_failure(error)
             raise AssertionError("unreachable") from error
 
-    def _proxy_call(self, target: int | None, method: str, args: list[Any]) -> Any:
+    def proxy_call(self, target: int | None, method: str, args: list[Any]) -> Any:
         result = self._request({"op": "call", "target": target, "method": method, "args": encode_args(args)})
-        return decode_result(result, self._proxy_call)
+        return decode_result(result, self.proxy_call)
 
     def _handle_failure(self, error: BaseException) -> None:
         returncode = exit_code(self._proc, EXIT_GRACE)
@@ -385,9 +385,6 @@ class WebotsInstance:
         raise failure
 
     def kill(self) -> None:
-        """
-        Hard-kill the whole Webots process group, wrapper children included.
-        """
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
@@ -398,9 +395,6 @@ class WebotsInstance:
                 os.killpg(proc.pid, 9)
 
     def shutdown(self, force: bool = False) -> None:
-        """
-        Terminate everything; a no-op when already dead or under --webots-keep-alive.
-        """
         if self.settings.keep_alive and not force:
             return
         self._teardown_agent()
