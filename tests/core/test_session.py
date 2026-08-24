@@ -212,3 +212,14 @@ def test_a_disconnected_but_running_controller_is_left_alone(events: list[str]) 
     session.world.connected.discard("a")  # type: ignore[attr-defined]
     assert session.recrew_departed(clean_only=True) == []
     assert events.count("launch:a") == 1
+
+
+def test_ops_spelling_reseats_like_the_method_spelling(events: list[str]) -> None:
+    # webots.ops.foo() and webots.agent_op("foo") are the same call; a plugin op
+    # may step, so both have to reseat first.
+    session = make_session(events, ["done"])
+    session.setup_controllers([spec("done")])
+    depart(session, "done")
+    session.world.agent_op = lambda op, params: "ok"  # type: ignore[attr-defined]
+    assert session.ops.survival_time() == "ok"
+    assert events.count("launch:done") == 2

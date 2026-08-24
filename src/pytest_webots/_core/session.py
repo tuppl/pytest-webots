@@ -27,15 +27,15 @@ class AgentOps:
     invokes the op named ``step_until`` with keyword arguments as request fields.
     """
 
-    def __init__(self, instance: WebotsInstance) -> None:
-        self._instance = instance
+    def __init__(self, session: WebotsSession) -> None:
+        self._session = session
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
         if name.startswith("_"):
             raise AttributeError(name)
 
         def call(**params: Any) -> Any:
-            return self._instance.agent_op(name, params)
+            return self._session.agent_op(name, **params)
 
         call.__name__ = name
         return call
@@ -49,7 +49,7 @@ class WebotsSession:
     def __init__(self, instance: WebotsInstance, builder: Callable[[ControllerSpec], None] | None = None) -> None:
         self._instance = instance
         self._builder = builder
-        self.ops = AgentOps(instance)
+        self.ops = AgentOps(self)
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
 
