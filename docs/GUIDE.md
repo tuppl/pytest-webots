@@ -55,6 +55,9 @@ A `webots` fixture is provided that allows you to control the world from pytest.
 |---|---|
 | `webots.supervisor` | Proxy to the [Supervisor API](https://cyberbotics.com/doc/reference/supervisor) inside Webots. Chained as `.getFromDef("X").getField("translation").setSFVec3f([...])`. |
 | `webots.step(ms=None)` | Advance the supervisor by `ms`. Default is one basic time step. |
+| `webots.pause()` / `webots.play()` | Freeze and resume the simulated clock. |
+| `webots.paused` | Whether this test paused the simulation. |
+| `webots.play_to(ms)` / `webots.play_for(ms)` | Advance the paused simulation to an absolute timestamp (or by a duration), then pause again. Returns the millisecond actually landed on. |
 | `webots.reset()` | `simulationReset` plus physics reset. |
 | `webots.reload()` | Reload the world from disk. Any node taken beforehand stops working. |
 | `webots.sim_time()` | Simulation time in seconds, as of the supervisor's last step. It does not tick on its own: call `webots.step()` first to read the current time. |
@@ -124,6 +127,42 @@ def test_bot(webots):
 At test setup, every declared controller is built, with build results cached against the controller's source files. A failed build fails every test declaring that controller (until the source changes, prompting a rebuild). Successfully-built controllers are then launched, each confirmed connected before the test body runs.
 
 Controllers are always scoped per test.
+
+### Sampling mid-run with pause
+
+A test body runs in real time while the simulation sprints in `fast` mode, so "assert while the game is running" is a race. `pause()` pins the clock so the world holds still while you look at it:
+
+```python
+@pytest.mark.webots_world("worlds/arena.wbt")
+@pytest.mark.webots_controller("my_bot", "controllers/my_bot")
+def test_mid_game(webots, wait_for_log):
+    webots.pause()
+    assert webots.supervisor.getFromDef("BALL").getPosition()[2] > 0
+    webots.play()
+```
+
+While paused, anything that needs simulated time to pass refuses immediately (`cannot step while the simulation is paused`) rather than blocking. A custom agent op that steps internally is not protected — it will block until `play()`. A test may end while paused; teardown resumes before resetting.
+
+`pause()` returns once the clock has actually stopped, but where it stops is "around now", not an exact simulated instant — in `fast` mode the clock sprints between your call and its effect. For a precise freeze at a condition the controller chooses, a synchronous robot that stops stepping holds the whole world still.
+
+### Walking the timeline with play_to
+
+For a deterministic timeline, boot the world paused and advance it in explicit hops:
+
+```python
+@pytest.mark.webots_world("worlds/arena.wbt", mode="pause")
+@pytest.mark.webots_controller("my_bot", "controllers/my_bot")
+def test_timeline(webots):
+    assert webots.sim_time() == 0.0  # frozen at zero, controllers connected
+    webots.play_to(1000)  # run to the 1-second mark, freeze
+    first = webots.supervisor.getFromDef("BALL").getPosition()
+    webots.play_to(2000)
+    assert webots.supervisor.getFromDef("BALL").getPosition() != first
+```
+
+A world with `mode="pause"` boots frozen at exactly t=0 when its robots are synchronous: the plugin boots Webots running (it announces nothing while paused), then freezes through the agent before the empty seats have let any time pass. Controllers connect while frozen.
+
+`play_to` lands on the first `basicTimeStep` boundary at or past the target and returns the millisecond it reached — assert against the return value. The simulation cannot rewind; a target in the past raises. Long advances are split into chunks internally, so any duration is safe in any mode.
 
 Python controllers run under the pytest interpreter with Webots' `controller` package on `PYTHONPATH`, so it can import your virtual environment. Any other controller starts through Webots' `webots-controller` launcher.
 

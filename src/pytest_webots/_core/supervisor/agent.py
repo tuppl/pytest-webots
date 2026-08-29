@@ -27,6 +27,7 @@ import importlib.util
 import json
 import socket
 import sys
+import time
 import traceback
 from collections.abc import Callable
 from typing import Any
@@ -73,6 +74,46 @@ def _op_basic_time_step(agent: Agent, request: dict[str, Any]) -> Any:
     return agent.basic_time_step
 
 
+def _settle_paused(sup: Any) -> None:
+    last = sup.getTime()
+    for _ in range(50):
+        time.sleep(0.04)
+        now = sup.getTime()
+        if now == last:
+            return
+        last = now
+
+
+def _op_set_mode(agent: Agent, request: dict[str, Any]) -> Any:
+    modes = {
+        "pause": agent.supervisor.SIMULATION_MODE_PAUSE,
+        "realtime": agent.supervisor.SIMULATION_MODE_REAL_TIME,
+        "fast": agent.supervisor.SIMULATION_MODE_FAST,
+    }
+    mode = request["mode"]
+    if mode not in modes:
+        raise ValueError(f"unknown simulation mode: {mode} (valid: {', '.join(sorted(modes))})")
+    agent.supervisor.simulationSetMode(modes[mode])
+    if mode == "pause":
+        _settle_paused(agent.supervisor)
+    return None
+
+
+def _op_advance_to(agent: Agent, request: dict[str, Any]) -> Any:
+    sup = agent.supervisor
+    modes = {"realtime": sup.SIMULATION_MODE_REAL_TIME, "fast": sup.SIMULATION_MODE_FAST}
+    target = float(request["target"])
+    sup.simulationSetMode(modes[request.get("mode") or "fast"])
+    try:
+        while sup.getTime() < target:
+            if sup.step(agent.basic_time_step) == -1:
+                break  # the simulation ended under us; report where it stopped
+    finally:
+        sup.simulationSetMode(sup.SIMULATION_MODE_PAUSE)
+        _settle_paused(sup)
+    return sup.getTime()
+
+
 def _op_call(agent: Agent, request: dict[str, Any]) -> Any:
     target = agent.supervisor if request.get("target") is None else agent.handles[request["target"]]
     method = getattr(target, request["method"])
@@ -93,6 +134,8 @@ _BUILTIN_OPS: dict[str, Callable[[Agent, dict[str, Any]], Any]] = {
     "quit": _op_quit,
     "time": _op_time,
     "basic_time_step": _op_basic_time_step,
+    "set_mode": _op_set_mode,
+    "advance_to": _op_advance_to,
     "call": _op_call,
     "release": _op_release,
 }

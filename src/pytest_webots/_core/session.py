@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .world import WebotsInstance
 
 # Lives beside agent.py: a directory with no module shadowing Webots' ``controller``.
+_ADVANCE_CHUNK_S = 16.0  # sim-seconds per RPC: realtime-mode chunks stay under the socket timeout
 _STUB_CONTROLLER = Path(__file__).parent / "supervisor" / "stub.py"
 
 
@@ -52,6 +53,7 @@ class WebotsSession:
         self.ops = AgentOps(self)
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
+        self._paused = (instance.spec.mode or instance.settings.mode) == "pause"
 
     def __repr__(self) -> str:
         controllers = ", ".join(sorted(self.controllers)) or "none"
@@ -81,15 +83,68 @@ class WebotsSession:
     def logs(self) -> str:
         return self._instance.output()
 
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        self._instance.set_mode("pause")
+        self._paused = True
+
+    def play(self, mode: str | None = None) -> None:
+        if mode == "pause":
+            raise WebotsError('play() cannot target "pause"; call pause() instead')
+        if mode is None:
+            configured = self._instance.spec.mode or self._instance.settings.mode
+            mode = configured if configured != "pause" else "fast"
+        self._instance.set_mode(mode)
+        self._paused = False
+
+    def _configured_mode(self) -> str:
+        mode = self._instance.spec.mode or self._instance.settings.mode
+        return "fast" if mode == "pause" else mode
+
+    def play_to(self, ms: int) -> int:
+        if not self._paused:
+            self.pause()
+        now = round(self._instance.sim_time() * 1000)
+        if ms < now:
+            raise WebotsError(f"simulation is at {now} ms; cannot rewind to {ms} ms. use reset()")
+        landed = now / 1000.0
+        target = ms / 1000.0
+        mode = self._configured_mode()
+        while landed * 1000 < ms:
+            self._reseat_before_blocking()
+            chunk = min(target, landed + _ADVANCE_CHUNK_S)
+            landed = self._instance.advance_to(chunk, mode)
+        return round(landed * 1000)
+
+    def play_for(self, ms: int) -> int:
+        if not self._paused:
+            self.pause()
+        return self.play_to(round(self._instance.sim_time() * 1000) + ms)
+
+    def ensure_playing(self) -> None:
+        if self._paused and self._instance.alive:
+            self.play()
+
+    def _require_playing(self, action: str) -> None:
+        if self._paused:
+            raise WebotsError(f"cannot {action} while the simulation is paused; call play() first")
+
     def step(self, ms: int | None = None) -> int:
+        self._require_playing("step")
         self._reseat_before_blocking()
         return self._instance.step(ms)
 
     def reset(self) -> None:
+        self._require_playing("reset")
         self._instance.reset()
 
     def reload(self) -> None:
+        self._require_playing("reload")
         self._instance.reload()
+        self._paused = (self._instance.spec.mode or self._instance.settings.mode) == "pause"
 
     def sim_time(self) -> float:
         self._reseat_before_blocking()

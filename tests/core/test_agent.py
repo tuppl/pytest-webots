@@ -14,6 +14,16 @@ def _no_call(handle: int | None, method: str, args: list[Any]) -> Any:
 
 
 class FakeSupervisor:
+    SIMULATION_MODE_PAUSE = 0
+    SIMULATION_MODE_REAL_TIME = 1
+    SIMULATION_MODE_FAST = 2
+
+    def __init__(self) -> None:
+        self.modes: list[int] = []
+
+    def simulationSetMode(self, mode: int) -> None:
+        self.modes.append(mode)
+
     def getBasicTimeStep(self) -> float:
         return 32.0
 
@@ -137,3 +147,66 @@ def test_broken_plugin_raises(agent: Agent, tmp_path: Path) -> None:
     plugin.write_text('raise RuntimeError("boom at import")\n')
     with pytest.raises(RuntimeError, match="boom at import"):
         load_plugins(agent, [str(plugin)])
+
+
+def test_set_mode_maps_names_to_supervisor_constants(agent: Agent) -> None:
+    for name, constant in (("pause", 0), ("realtime", 1), ("fast", 2)):
+        agent.dispatch({"op": "set_mode", "mode": name})
+        assert agent.supervisor.modes[-1] == constant
+
+
+def test_set_mode_rejects_unknown_modes(agent: Agent) -> None:
+    with pytest.raises(ValueError, match=r"unknown simulation mode: warp.*fast.*pause.*realtime"):
+        agent.dispatch({"op": "set_mode", "mode": "warp"})
+
+
+class TickingSupervisor(FakeSupervisor):
+    """
+    A supervisor whose clock moves when stepped, unlike the fixed-time fake.
+    """
+
+    def __init__(self, stop_after: int | None = None, raise_after: int | None = None) -> None:
+        super().__init__()
+        self.time = 0.0
+        self.steps = 0
+        self.stop_after = stop_after
+        self.raise_after = raise_after
+
+    def getTime(self) -> float:
+        return self.time
+
+    def step(self, ms: int) -> int:
+        self.steps += 1
+        if self.raise_after is not None and self.steps > self.raise_after:
+            raise RuntimeError("sim gone")
+        if self.stop_after is not None and self.steps > self.stop_after:
+            return -1
+        self.time = round(self.time + ms / 1000.0, 9)
+        return 0
+
+
+def test_advance_to_runs_then_repauses() -> None:
+    agent = Agent(TickingSupervisor())
+    landed = agent.dispatch({"op": "advance_to", "target": 0.096, "mode": "fast"})
+    assert landed == pytest.approx(0.096)
+    assert agent.supervisor.modes == [FakeSupervisor.SIMULATION_MODE_FAST, FakeSupervisor.SIMULATION_MODE_PAUSE]
+
+
+def test_advance_to_honours_realtime() -> None:
+    agent = Agent(TickingSupervisor())
+    agent.dispatch({"op": "advance_to", "target": 0.032, "mode": "realtime"})
+    assert agent.supervisor.modes[0] == FakeSupervisor.SIMULATION_MODE_REAL_TIME
+
+
+def test_advance_to_stops_when_the_simulation_ends() -> None:
+    agent = Agent(TickingSupervisor(stop_after=2))
+    landed = agent.dispatch({"op": "advance_to", "target": 0.320, "mode": "fast"})
+    assert landed == pytest.approx(0.064)  # reports where it stopped, no hang
+
+
+def test_advance_to_repauses_even_when_a_step_raises() -> None:
+    # The finally is the guard against stranding the world running.
+    agent = Agent(TickingSupervisor(raise_after=1))
+    with pytest.raises(RuntimeError, match="sim gone"):
+        agent.dispatch({"op": "advance_to", "target": 0.320, "mode": "fast"})
+    assert agent.supervisor.modes[-1] == FakeSupervisor.SIMULATION_MODE_PAUSE

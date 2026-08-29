@@ -42,16 +42,9 @@ def _build(spec: ControllerSpec, config: pytest.Config, settings: Settings) -> N
 
 
 def _leave_world_clean(session: WebotsSession, instance: WebotsInstance) -> None:
-    """
-    Leave the world fit for the next test, whether this one finished or failed
-    in setup: re-crew any robot whose controller departed so the reset's landing
-    step is not blocked, reset, then drop this test's controllers.
-
-    A function-scoped world is about to be shut down, so there is nothing to
-    preserve.
-    """
     try:
         if instance.spec.scope != "function" and instance.alive:
+            session.ensure_playing()
             session.recrew_departed()
             if instance.alive:
                 instance.reset()

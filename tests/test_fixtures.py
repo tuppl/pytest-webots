@@ -1,9 +1,10 @@
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from pytest_webots import WebotsCrashedError, WebotsQuitError, WebotsSession
+from pytest_webots import WebotsCrashedError, WebotsError, WebotsQuitError, WebotsSession
 from pytest_webots._core.config import discover_webots_home
 
 WaitForLog = Callable[..., None]
@@ -14,6 +15,7 @@ MINIMAL = "worlds/minimal.wbt"
 SYNC = "worlds/sync.wbt"
 PACER = Path(__file__).parent / "controllers" / "pacer" / "pacer.py"
 QUITTER = Path(__file__).parent / "controllers" / "quitter" / "quitter.py"
+PROBE = Path(__file__).parent / "controllers" / "probe" / "probe.py"
 INITIAL_BALL = [0.0, 0.0, 1.0]
 MOVED_BALL = [0.5, -0.5, 2.0]
 
@@ -202,3 +204,66 @@ def test_broken_agent_plugin_fails_boot_with_traceback(pytester: pytest.Pytester
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*agent exited with code 3*"])
     result.stdout.fnmatch_lines(["*boom at import*"])
+
+
+@pytest.mark.webots_world(SYNC)
+@pytest.mark.webots_controller("probe", str(PROBE))
+def test_pause_freezes_the_clock(webots: WebotsSession) -> None:
+    webots.step()  # the controller is driving the clock
+    webots.pause()
+    frozen = webots.sim_time()
+    # queries still answer while paused
+    assert webots.supervisor.getFromDef("BALL").getPosition() == pytest.approx([0.0, 0.0, 1.0])
+    time.sleep(0.4)  # real time passes; sim time must not
+    assert webots.sim_time() == frozen
+    with pytest.raises(WebotsError, match="paused"):
+        webots.step()
+    webots.play()
+    webots.step(64)
+    assert webots.sim_time() > frozen
+
+
+_BOOTS_WHEN_PAUSED_TEST_RAN: list[int] = []
+
+
+@pytest.mark.webots_world(SYNC)
+@pytest.mark.webots_controller("probe", str(PROBE))
+def test_a_test_may_end_while_paused(webots: WebotsSession, world_boots: list[str]) -> None:
+    # Teardown's reset lands via a step, so it must resume first or hang.
+    webots.pause()
+    _BOOTS_WHEN_PAUSED_TEST_RAN.append(world_boots.count("sync.wbt"))
+
+
+@pytest.mark.webots_world(SYNC)
+@pytest.mark.webots_controller("probe", str(PROBE))
+def test_world_survives_a_test_that_ended_paused(webots: WebotsSession, world_boots: list[str]) -> None:
+    assert world_boots.count("sync.wbt") == _BOOTS_WHEN_PAUSED_TEST_RAN[0]  # reused, not rebooted
+    assert not webots.paused
+    webots.step()
+
+
+@pytest.mark.webots_world(SYNC, scope="function")
+@pytest.mark.webots_controller("probe", str(PROBE))
+def test_play_to_walks_the_timeline(webots: WebotsSession) -> None:
+    webots.pause()
+    t0 = round(webots.sim_time() * 1000)
+    landed = webots.play_to(t0 + 1000)
+    assert t0 + 1000 <= landed <= t0 + 1000 + 64  # boundary plus at most the measured overshoot
+    assert webots.paused
+    time.sleep(0.3)  # real time passes; the timeline must not
+    assert round(webots.sim_time() * 1000) == landed
+    assert webots.play_to(t0 + 2000) >= t0 + 2000
+    with pytest.raises(WebotsError, match="cannot rewind"):
+        webots.play_to(t0 + 1000)
+
+
+@pytest.mark.webots_world(SYNC, mode="pause", scope="function")
+@pytest.mark.webots_controller("probe", str(PROBE))
+def test_mode_pause_boots_frozen_at_zero(webots: WebotsSession) -> None:
+    # Webots announces nothing while paused, so the plugin boots fast and
+    # freezes via the agent while the empty sync seats still hold t=0.
+    assert webots.paused
+    assert webots.sim_time() == 0.0
+    assert "probe" in webots.world.connected  # controllers connect while paused
+    landed = webots.play_to(320)
+    assert 320 <= landed <= 320 + 64

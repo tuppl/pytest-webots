@@ -135,7 +135,7 @@ class WebotsInstance:
             "--batch",
             "--stdout",
             "--stderr",
-            f"--mode={self.spec.mode or self.settings.mode}",
+            f"--mode={self._boot_mode()}",
             f"--port={self.port}",
             "--extern-urls",
         ]
@@ -146,6 +146,10 @@ class WebotsInstance:
         cmd += self._hooks.world_args(self.spec.path)
         cmd.append(str(self._injected if self._injected is not None else self.spec.path))
         return cmd
+
+    def _boot_mode(self) -> str:
+        mode = self.spec.mode or self.settings.mode
+        return "fast" if mode == "pause" else mode
 
     def boot(self) -> None:
         if self.alive:
@@ -195,6 +199,13 @@ class WebotsInstance:
         self._wait_ready()
         if self.settings.inject_supervisor:
             self._start_agent()
+        if (self.spec.mode or self.settings.mode) == "pause":
+            if not self.settings.inject_supervisor:
+                raise WebotsError(
+                    "mode='pause' needs the injected supervisor to freeze the world at boot; "
+                    "remove --webots-no-inject or drop mode='pause'"
+                )
+            self.set_mode("pause")
 
     def ensure_running(self) -> None:
         if not self.alive:
@@ -219,6 +230,14 @@ class WebotsInstance:
         self._teardown_agent()
         self._wait_ready()
         self._start_agent()
+        if (self.spec.mode or self.settings.mode) == "pause":
+            self.set_mode("pause")
+
+    def advance_to(self, target: float, mode: str) -> float:
+        return float(self._request({"op": "advance_to", "target": target, "mode": mode}))
+
+    def set_mode(self, mode: str) -> None:
+        self._request({"op": "set_mode", "mode": mode})
 
     def sim_time(self) -> float:
         return float(self._request({"op": "time"}))

@@ -1,4 +1,6 @@
+import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -12,9 +14,27 @@ class StubInstance:
     world_path = "worlds/stub.wbt"
     alive = True
 
-    def __init__(self, robots: list[str]) -> None:
+    def __init__(self, robots: list[str], mode: str | None = None, default_mode: str = "fast") -> None:
         self.robots = {name: f"ipc://1234/{name}" for name in robots}
         self.connected = set(robots)
+        self.spec = SimpleNamespace(mode=mode)
+        self.settings = SimpleNamespace(mode=default_mode)
+        self.modes: list[str] = []
+        self.advances: list[tuple[float, str]] = []
+        self.time = 0.0
+
+    def set_mode(self, mode: str) -> None:
+        self.modes.append(mode)
+
+    def sim_time(self) -> float:
+        return self.time
+
+    def advance_to(self, target: float, mode: str) -> float:
+        self.advances.append((target, mode))
+        dt = 0.032
+        steps = math.ceil(round((target - self.time) / dt, 9))
+        self.time = round(self.time + max(steps, 0) * dt, 9)  # first boundary at or past target
+        return self.time
 
 
 class FakeProcess:
@@ -223,3 +243,99 @@ def test_ops_spelling_reseats_like_the_method_spelling(events: list[str]) -> Non
     session.world.agent_op = lambda op, params: "ok"  # type: ignore[attr-defined]
     assert session.ops.survival_time() == "ok"
     assert events.count("launch:done") == 2
+
+
+def test_pause_freezes_and_gated_calls_refuse(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.pause()
+    assert session.paused
+    assert session.world.modes == ["pause"]  # type: ignore[attr-defined]
+    for action, call in (("step", session.step), ("reset", session.reset), ("reload", session.reload)):
+        with pytest.raises(WebotsError, match=f"cannot {action} while the simulation is paused"):
+            call()
+
+
+def test_play_restores_the_configured_mode(events: list[str]) -> None:
+    session = WebotsSession(StubInstance(["a"], mode="realtime"))  # type: ignore[arg-type]
+    session.pause()
+    session.play()
+    assert session.world.modes == ["pause", "realtime"]  # type: ignore[attr-defined]
+    assert not session.paused
+
+
+def test_play_on_a_pause_configured_world_falls_through_to_fast(events: list[str]) -> None:
+    session = WebotsSession(StubInstance(["a"], mode="pause"))  # type: ignore[arg-type]
+    assert session.paused  # booted paused: the session starts knowing it
+    session.play()
+    assert session.world.modes == ["fast"]  # type: ignore[attr-defined]
+
+
+def test_play_refuses_pause_as_a_target(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    with pytest.raises(WebotsError, match="cannot target"):
+        session.play(mode="pause")
+
+
+def test_ensure_playing_resumes_only_when_needed(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.ensure_playing()
+    assert session.world.modes == []  # type: ignore[attr-defined]  # not paused: no-op
+    session.pause()
+    session.ensure_playing()
+    assert session.world.modes == ["pause", "fast"]  # type: ignore[attr-defined]
+    session.pause()
+    session.world.alive = False  # type: ignore[misc]
+    session.ensure_playing()  # dead world: nothing to talk to, must not raise
+    assert session.world.modes == ["pause", "fast", "pause"]  # type: ignore[attr-defined]
+
+
+def test_play_to_lands_on_a_boundary_and_stays_paused(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.pause()
+    assert session.play_to(1000) == 1024  # first 32 ms boundary past the target
+    assert session.world.advances == [(1.0, "fast")]  # type: ignore[attr-defined]
+    assert session.paused
+
+
+def test_play_to_pauses_a_running_world_first(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.play_to(32)
+    assert session.world.modes[0] == "pause"  # type: ignore[attr-defined]
+    assert session.paused
+
+
+def test_play_to_refuses_to_rewind(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.pause()
+    session.play_to(1000)
+    with pytest.raises(WebotsError, match=r"at 1024 ms; cannot rewind to 500"):
+        session.play_to(500)
+
+
+def test_play_to_at_the_current_time_is_a_no_op(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.pause()
+    landed = session.play_to(1000)
+    assert session.play_to(landed) == landed
+    assert len(session.world.advances) == 1  # type: ignore[attr-defined]
+
+
+def test_play_to_chunks_long_advances(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.pause()
+    session.play_to(40_000)
+    assert [t for t, _ in session.world.advances] == [16.0, 32.0, 40.0]  # type: ignore[attr-defined]
+
+
+def test_play_to_uses_the_configured_mode(events: list[str]) -> None:
+    session = WebotsSession(StubInstance(["a"], mode="realtime"))  # type: ignore[arg-type]
+    session.pause()
+    session.play_to(32)
+    assert session.world.advances == [(0.032, "realtime")]  # type: ignore[attr-defined]
+
+
+def test_play_for_advances_from_here(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.pause()
+    session.play_to(1000)  # at 1024
+    assert session.play_for(1000) == 2048  # 2024 rounds up to the next boundary
