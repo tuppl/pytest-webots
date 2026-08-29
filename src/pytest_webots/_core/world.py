@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -50,6 +51,8 @@ class WorldHooks(Protocol):
 
     def crashed(self, instance: WebotsInstance, error: BaseException) -> None: ...
 
+    def controller_departed(self, instance: WebotsInstance, robot: str) -> None: ...
+
     def before_reset(self, instance: WebotsInstance) -> None: ...
 
     def after_reset(self, instance: WebotsInstance) -> None: ...
@@ -68,6 +71,8 @@ class NoHooks:
     def stopping(self, instance: WebotsInstance) -> None: ...
 
     def crashed(self, instance: WebotsInstance, error: BaseException) -> None: ...
+
+    def controller_departed(self, instance: WebotsInstance, robot: str) -> None: ...
 
     def before_reset(self, instance: WebotsInstance) -> None: ...
 
@@ -107,6 +112,8 @@ class WebotsInstance:
         self._boot_failures = 0
         self._boot_error: BaseException | None = None
         self._announced_port: int | None = None
+        self._departures: ThreadPoolExecutor | None = None
+        self._departure_listener: Callable[[str], None] | None = None
 
     def __repr__(self) -> str:
         return f"<WebotsInstance {self.spec} port={self.port} {'running' if self.alive else 'stopped'}>"
@@ -328,9 +335,30 @@ class WebotsInstance:
                 self.connected.add(name)
                 self._connect_gen[name] = self._connect_gen.get(name, 0) + 1
         elif match := _DISCONNECTED_RE.match(line):
+            robot = match.group(1)
             with self._lock:
-                self.connected.discard(match.group(1))
+                self.connected.discard(robot)
+            if robot != self.settings.supervisor_name:
+                self._dispatch_departure(robot)
         return True
+
+    def set_departure_listener(self, listener: Callable[[str], None] | None) -> None:
+        self._departure_listener = listener
+
+    def _dispatch_departure(self, robot: str) -> None:
+        if self._departures is None:
+            self._departures = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"departure-{self.port}")
+        with suppress(RuntimeError):  # shutdown raced the submit: the world is going away
+            self._departures.submit(self._departure_job, robot)
+
+    def _departure_job(self, robot: str) -> None:
+        try:
+            listener = self._departure_listener
+            if listener is not None:
+                listener(robot)
+            self._hooks.controller_departed(self, robot)
+        except Exception as error:  # noqa: BLE001 - surfaced in the report tail, not lost on a worker thread
+            self._reader.append(f"pytest-webots: departure handling for {robot!r} failed: {error!r}")
 
     def _start_agent(self) -> None:
         if sys.platform == "win32":
@@ -416,6 +444,9 @@ class WebotsInstance:
     def shutdown(self, force: bool = False) -> None:
         if self.settings.keep_alive and not force:
             return
+        if self._departures is not None:
+            self._departures.shutdown(wait=False, cancel_futures=True)
+            self._departures = None
         self._teardown_agent()
         if self._proc is not None:
             if self._proc.poll() is None:

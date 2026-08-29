@@ -37,6 +37,9 @@ class _PytestWorldHooks:
     def crashed(self, instance: WebotsInstance, error: BaseException) -> None:
         self._hook.pytest_webots_world_crashed(instance=instance, error=error)
 
+    def controller_departed(self, instance: WebotsInstance, robot: str) -> None:
+        self._hook.pytest_webots_controller_departed(instance=instance, robot=robot)
+
     def before_reset(self, instance: WebotsInstance) -> None:
         self._hook.pytest_webots_before_reset(instance=instance)
 

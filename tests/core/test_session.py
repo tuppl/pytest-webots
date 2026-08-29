@@ -22,9 +22,21 @@ class StubInstance:
         self.modes: list[str] = []
         self.advances: list[tuple[float, str]] = []
         self.time = 0.0
+        self.listener: Any = None
 
     def set_mode(self, mode: str) -> None:
         self.modes.append(mode)
+
+    def set_departure_listener(self, listener: Any) -> None:
+        self.listener = listener
+
+    def notify_departure(self, robot: str) -> None:
+        """
+        Run the listener inline; the real instance runs it on the worker.
+        """
+        self.connected.discard(robot)
+        if self.listener is not None:
+            self.listener(robot)
 
     def sim_time(self) -> float:
         return self.time
@@ -53,6 +65,9 @@ class FakeProcess:
 
     def terminate(self) -> None:
         FakeProcess.events.append(f"terminate:{self.spec.robot}")
+
+    def wait_exit(self, timeout: float) -> None:
+        pass
 
 
 @pytest.fixture
@@ -339,3 +354,46 @@ def test_play_for_advances_from_here(events: list[str]) -> None:
     session.pause()
     session.play_to(1000)  # at 1024
     assert session.play_for(1000) == 2048  # 2024 rounds up to the next boundary
+
+
+def test_departure_notification_reseats_without_a_call_boundary(events: list[str]) -> None:
+    # The in-flight case: the caller is parked in the agent's step and cannot
+    # check for itself, so the seat is filled from the departure worker.
+    session = make_session(events, ["done"])
+    session.setup_controllers([spec("done")])
+    depart(session, "done")
+    session.world.notify_departure("done")  # type: ignore[attr-defined]
+    assert events.count("launch:done") == 2
+
+
+def test_departure_of_a_crashed_controller_is_left_dead(events: list[str]) -> None:
+    session = make_session(events, ["crashed"])
+    session.setup_controllers([spec("crashed")])
+    depart(session, "crashed", returncode=139)
+    session.world.notify_departure("crashed")  # type: ignore[attr-defined]
+    assert events.count("launch:crashed") == 1
+
+
+def test_departure_after_teardown_is_ignored(events: list[str]) -> None:
+    session = make_session(events, ["done"])
+    session.setup_controllers([spec("done")])
+    depart(session, "done")
+    session.terminate_controllers()
+    assert session.world.listener is None  # type: ignore[attr-defined]  # unsubscribed
+    session._on_departure("done")  # a straggler already on the worker queue
+    assert events.count("launch:done") == 1  # no stub outliving the test
+
+
+def test_departure_of_an_undeclared_robot_is_ignored(events: list[str]) -> None:
+    session = make_session(events, ["a"])
+    session.setup_controllers([spec("a")])
+    session.world.notify_departure("someone-else")  # type: ignore[attr-defined]
+    assert events.count("launch:a") == 1
+
+
+def test_departure_of_a_disconnected_but_running_controller_is_left_alone(events: list[str]) -> None:
+    # Still running after the grace: it may reconnect itself (e.g. a reload).
+    session = make_session(events, ["a"])
+    session.setup_controllers([spec("a")])
+    session.world.notify_departure("a")  # type: ignore[attr-defined]  # process still alive
+    assert events.count("launch:a") == 1

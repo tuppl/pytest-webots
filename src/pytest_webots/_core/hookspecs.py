@@ -69,6 +69,16 @@ def pytest_webots_build_controller(spec: ControllerSpec, config: pytest.Config) 
     """
 
 
+def pytest_webots_controller_departed(instance: WebotsInstance, robot: str) -> None:
+    """
+    Called when a controller this test launched has disconnected from Webots.
+
+    Fires off the main thread, after the process has been given a moment to
+    finish exiting; the plugin's own implementation reseats a cleanly exited
+    robot so the world keeps stepping.
+    """
+
+
 def pytest_webots_before_reset(instance: WebotsInstance) -> None:
     """
     Called before the between-test simulation reset.

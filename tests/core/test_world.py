@@ -1,6 +1,7 @@
 import os
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -376,6 +377,9 @@ class RecordingHooks:
     def crashed(self, instance: WebotsInstance, error: BaseException) -> None:
         self.crashes.append(error)
 
+    def controller_departed(self, instance: WebotsInstance, robot: str) -> None:
+        self.events.append(f"departed:{robot}")
+
     def before_reset(self, instance: WebotsInstance) -> None:
         self.events.append("before_reset")
 
@@ -459,3 +463,72 @@ def test_lifecycle_notifications_reach_the_hooks(
     instance.boot()
     instance.shutdown(force=True)
     assert hooks.events == ["started", "stopping"]
+
+
+def test_disconnect_dispatches_departure_off_the_drain_thread(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, make_settings: MakeSettings
+) -> None:
+    hooks = RecordingHooks()
+    fake_webots(
+        monkeypatch,
+        [
+            "ipc://1234/probe",
+            "INFO: 'probe' extern controller: connected.",
+            "INFO: 'probe' extern controller: disconnected.",
+        ],
+    )
+    instance = stub_instance(tmp_path, make_settings, port=1234, hooks=hooks)
+    seen_thread: list[str] = []
+    instance.set_departure_listener(lambda robot: seen_thread.append(threading.current_thread().name))
+    try:
+        instance.boot()
+        deadline = time.monotonic() + 5
+        while "departed:probe" not in hooks.events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "departed:probe" in hooks.events
+        assert seen_thread and seen_thread[0].startswith("departure-")  # the worker, never the drain thread
+    finally:
+        instance.shutdown(force=True)
+
+
+def test_supervisor_disconnects_are_not_departures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, make_settings: MakeSettings
+) -> None:
+    hooks = RecordingHooks()
+    fake_webots(
+        monkeypatch,
+        [
+            "ipc://1234/probe",
+            "INFO: 'pytest-supervisor' extern controller: disconnected.",
+        ],
+    )
+    instance = stub_instance(tmp_path, make_settings, port=1234, hooks=hooks)
+    try:
+        instance.boot()
+        time.sleep(0.3)
+        assert not [event for event in hooks.events if event.startswith("departed:")]
+    finally:
+        instance.shutdown(force=True)
+
+
+def test_a_failing_departure_handler_lands_in_the_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, make_settings: MakeSettings
+) -> None:
+    fake_webots(
+        monkeypatch,
+        ["ipc://1234/probe", "INFO: 'probe' extern controller: disconnected."],
+    )
+    instance = stub_instance(tmp_path, make_settings, port=1234)
+
+    def explode(robot: str) -> None:
+        raise RuntimeError("handler bug")
+
+    instance.set_departure_listener(explode)
+    try:
+        instance.boot()
+        deadline = time.monotonic() + 5
+        while "departure handling" not in instance.output() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "departure handling for 'probe' failed" in instance.output()
+    finally:
+        instance.shutdown(force=True)

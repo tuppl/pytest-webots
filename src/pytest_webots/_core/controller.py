@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -140,6 +141,11 @@ class ControllerProcess:
                 )
             time.sleep(0.05)
         raise WebotsError(f"controller for robot {robot!r} did not connect within {timeout:.0f}s:\n{self.logs}")
+
+    def wait_exit(self, timeout: float) -> None:
+        if self._proc is not None:
+            with suppress(subprocess.TimeoutExpired):
+                self._proc.wait(timeout)
 
     def terminate(self) -> None:
         terminate(self._proc)

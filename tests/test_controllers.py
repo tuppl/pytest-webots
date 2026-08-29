@@ -451,3 +451,52 @@ def test_a_new_controller_can_take_over_a_reseated_robot(webots: WebotsSession, 
     wait_for_log(replacement, "probe controller ready")
     assert replacement.alive
     webots.step()
+
+
+def test_departure_during_an_in_flight_request(pytester: pytest.Pytester, tmp_path: Path) -> None:
+    """
+    The departure a game test actually cares about lands mid-request: the
+    caller is parked in the agent's step and cannot run a boundary check, so
+    the seat is filled from the departure worker instead.
+    """
+    world = Path(__file__).parent / "worlds" / "sync.wbt"
+    midflight = Path(__file__).parent / "controllers" / "midflight" / "midflight.py"
+    departures = tmp_path / "departures.txt"
+    pytester.makepyfile(
+        agent_ext="""
+        def register(agent):
+            @agent.op("long_op")
+            def long_op(agent, request):
+                for _ in range(300):
+                    if agent.supervisor.step(agent.basic_time_step) == -1:
+                        break
+                return agent.supervisor.getTime()
+        """
+    )
+    pytester.makeini("[pytest]\nwebots_agent_plugins = agent_ext.py\n")
+    pytester.makeconftest(
+        f"""
+        def pytest_webots_controller_departed(instance, robot):
+            with open({str(departures)!r}, "a") as record:
+                record.write(robot + "\\n")
+        """
+    )
+    pytester.makepyfile(
+        f"""
+        import time
+
+        import pytest
+
+        @pytest.mark.webots_world({str(world)!r}, scope="function")
+        @pytest.mark.webots_controller("probe", {str(midflight)!r})
+        def test_in_flight(webots):
+            assert webots.controllers["probe"].alive
+            start = time.monotonic()
+            webots.ops.long_op()                    # the controller exits partway through
+            assert time.monotonic() - start < 15    # the symptom was a 30s timeout
+            webots.step()
+        """
+    )
+    result = pytester.runpytest("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1)
+    assert departures.read_text().splitlines().count("probe") >= 1  # the public hook fired

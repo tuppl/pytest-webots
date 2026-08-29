@@ -4,6 +4,8 @@ Per-test session object handed to tests by the webots fixture.
 
 from __future__ import annotations
 
+import threading
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
 
 # Lives beside agent.py: a directory with no module shadowing Webots' ``controller``.
 _ADVANCE_CHUNK_S = 16.0  # sim-seconds per RPC: realtime-mode chunks stay under the socket timeout
+_DEPARTURE_GRACE = 2.0  # sim-seconds per RPC: realtime-mode chunks stay under the socket timeout
 _STUB_CONTROLLER = Path(__file__).parent / "supervisor" / "stub.py"
 
 
@@ -54,6 +57,9 @@ class WebotsSession:
         self.controllers: dict[str, ControllerProcess] = {}
         self._pending: dict[str, ControllerSpec] = {}
         self._paused = (instance.spec.mode or instance.settings.mode) == "pause"
+        self._seats = threading.Lock()
+        self._closed = False
+        instance.set_departure_listener(self._on_departure)
 
     def __repr__(self) -> str:
         controllers = ", ".join(sorted(self.controllers)) or "none"
@@ -77,7 +83,8 @@ class WebotsSession:
 
     def _reseat_before_blocking(self) -> None:
         if self._departed():
-            self.recrew_departed(clean_only=True)
+            with self._seats:
+                self.recrew_departed(clean_only=True)
 
     @property
     def logs(self) -> str:
@@ -247,6 +254,23 @@ class WebotsSession:
                 break
         return stubs
 
+    def _on_departure(self, robot: str) -> None:
+        process = self.controllers.get(robot)
+        if process is None:
+            return
+        process.wait_exit(_DEPARTURE_GRACE)  # the disconnect log can beat the exit
+        if process.alive or process.returncode != 0:
+            return  # still running (may reconnect), or died badly: leave the seat empty
+        with self._seats:
+            if self._closed or self.controllers.get(robot) is not process:
+                return  # torn down, or already reseated at a call boundary
+            with suppress(WebotsError):
+                self._launch(ControllerSpec(robot=robot, path=_STUB_CONTROLLER), build=False)
+
     def terminate_controllers(self) -> None:
-        for process in self.controllers.values():
+        self._instance.set_departure_listener(None)
+        with self._seats:
+            self._closed = True
+            processes = list(self.controllers.values())
+        for process in processes:
             process.terminate()
