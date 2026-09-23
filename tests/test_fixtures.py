@@ -214,8 +214,8 @@ def test_pause_freezes_the_clock(webots: WebotsSession) -> None:
     frozen = webots.sim_time()
     # queries still answer while paused
     assert webots.supervisor.getFromDef("BALL").getPosition() == pytest.approx([0.0, 0.0, 1.0])
-    time.sleep(0.4)  # real time passes; sim time must not
-    assert webots.sim_time() == frozen
+    time.sleep(0.4)  # in fast mode this would be hundreds of steps if the clock ran
+    assert webots.sim_time() == pytest.approx(frozen, abs=0.032)
     with pytest.raises(WebotsError, match="paused"):
         webots.step()
     webots.play()

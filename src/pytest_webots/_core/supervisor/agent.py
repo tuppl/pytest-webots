@@ -76,12 +76,14 @@ def _op_basic_time_step(agent: Agent, request: dict[str, Any]) -> Any:
 
 def _settle_paused(sup: Any) -> None:
     last = sup.getTime()
-    for _ in range(50):
+    agreements = 0
+    for _ in range(75):
         time.sleep(0.04)
         now = sup.getTime()
-        if now == last:
-            return
+        agreements = agreements + 1 if now == last else 0
         last = now
+        if agreements >= 2:
+            return
 
 
 def _op_set_mode(agent: Agent, request: dict[str, Any]) -> Any:

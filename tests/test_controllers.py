@@ -444,7 +444,10 @@ def test_a_new_controller_can_take_over_a_reseated_robot(webots: WebotsSession, 
     deadline = time.monotonic() + 20
     while finished.alive and time.monotonic() < deadline:
         time.sleep(0.05)
-    webots.step()  # reseats, so a stub now holds the seat
+    webots.step()  # blocks until the seat is retaken, then returns
+    deadline = time.monotonic() + 10
+    while webots.controllers["probe"] is finished and time.monotonic() < deadline:
+        time.sleep(0.05)  # Webots frees the seat after the process dies; the listener fills it
     assert webots.controllers["probe"].spec.path.name == "stub.py"
 
     replacement = webots.launch_controller("probe", PROBE / "probe.py")

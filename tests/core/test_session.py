@@ -227,17 +227,21 @@ def test_launching_over_a_dead_controller_does_not_terminate_it(events: list[str
     assert "terminate:a" not in events  # nothing to evict
 
 
-def test_a_dead_process_counts_as_departed_before_webots_says_so(events: list[str]) -> None:
-    # The disconnect log and the process exit race; catching only the log leaves
-    # a window where the seat is empty and nothing reports it.
+def test_a_dead_process_webots_still_lists_is_left_for_the_listener(events: list[str]) -> None:
+    # The process dies before Webots notices the socket close. Until it frees
+    # the seat, a stub launched there is refused and its failure reaches the
+    # test, so the call boundary waits for Webots' own view.
     session = make_session(events, ["a"])
     session.setup_controllers([spec("a")])
     process = session.controllers["a"]
     process.alive = False  # type: ignore[attr-defined]
     process.returncode = 0  # type: ignore[misc]
-    # world.connected still lists it: Webots has not logged the disconnect yet
     assert "a" in session.world.connected  # type: ignore[attr-defined]
-    assert [stub.spec.robot for stub in session.recrew_departed(clean_only=True)] == ["a"]
+    assert session.recrew_departed(clean_only=True) == []
+    assert events.count("launch:a") == 1
+
+    session.world.notify_departure("a")  # type: ignore[attr-defined]
+    assert events.count("launch:a") == 2  # the listener reseats once the seat is free
 
 
 def test_a_disconnected_but_running_controller_is_left_alone(events: list[str]) -> None:

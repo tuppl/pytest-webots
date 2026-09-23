@@ -230,9 +230,7 @@ class WebotsSession:
 
     def _departed(self) -> list[str]:
         connected = self._instance.connected
-        return sorted(
-            robot for robot, process in self.controllers.items() if robot not in connected or not process.alive
-        )
+        return sorted(robot for robot in self.controllers if robot not in connected)
 
     def recrew_departed(self, clean_only: bool = False) -> list[ControllerProcess]:
         if not self._instance.alive:
